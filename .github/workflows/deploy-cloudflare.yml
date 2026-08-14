@@ -1,0 +1,82 @@
+name: Deploy Super Guan Hao to Cloudflare
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-super-guan-hao
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+    steps:
+      - name: Check Cloudflare credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${CLOUDFLARE_API_TOKEN}" || -z "${CLOUDFLARE_ACCOUNT_ID}" ]]; then
+            echo "Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID as GitHub Actions repository secrets." >&2
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install, build, and test
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(find public/guan-hao -type f | wc -l)" -eq 43
+          npm ci
+          npm run build
+          npm test -- --run
+          npm exec --no -- wrangler deploy --dry-run --config wrangler.deploy.jsonc
+
+      - name: Deploy Worker and custom domain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm exec --no -- wrangler deploy --config wrangler.deploy.jsonc
+
+      - name: Verify production domain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          page=""
+          for attempt in {1..18}; do
+            if page="$(curl --fail --silent --show-error --max-time 30 https://guanhao.johncat.top/)"; then
+              break
+            fi
+            echo "Domain or certificate is not ready yet (attempt ${attempt}/18)."
+            sleep 10
+          done
+
+          if [[ -z "${page}" ]]; then
+            echo "The production domain did not become reachable in time." >&2
+            exit 1
+          fi
+
+          grep -Fq "超级大关昊" <<<"${page}"
+          if grep -Fq "Hello World" <<<"${page}"; then
+            echo "The old Hello World Worker is still being served." >&2
+            exit 1
+          fi
+
+          curl --fail --silent --show-error --head --max-time 30             https://guanhao.johncat.top/guan-hao/campus.webp >/dev/null
+          echo "Production domain and sample media verified."
