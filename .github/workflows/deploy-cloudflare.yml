@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - public/fca6cb2f88fa0690d15f0cde3ad718b0.txt
+      - worker/index.ts
 
 permissions:
   contents: read
