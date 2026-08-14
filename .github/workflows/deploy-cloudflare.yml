@@ -2,6 +2,11 @@ name: Deploy Super Guan Hao to Cloudflare
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - public/fca6cb2f88fa0690d15f0cde3ad718b0.txt
 
 permissions:
   contents: read
@@ -79,4 +84,8 @@ jobs:
           fi
 
           curl --fail --silent --show-error --head --max-time 30             https://guanhao.johncat.top/guan-hao/campus.webp >/dev/null
-          echo "Production domain and sample media verified."
+
+          verification="$(curl --fail --silent --show-error --max-time 30 \
+            https://guanhao.johncat.top/fca6cb2f88fa0690d15f0cde3ad718b0.txt)"
+          [[ "${verification}" == "21d8b5393838f286c4a5bc799c24ce6302a4301b" ]]
+          echo "Production domain, sample media, and WeChat verification file verified."
