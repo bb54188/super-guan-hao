@@ -1,0 +1,129 @@
+name: Restore site from migration fragments
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/restore-site.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: restore-super-guan-hao
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reassemble and inspect migration archive
+        id: archive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          shopt -s nullglob
+
+          parts=(super-guan-hao-migration.part-*.bin)
+          if [[ ${#parts[@]} -ne 7 ]]; then
+            echo "Expected 7 migration fragments, found ${#parts[@]}." >&2
+            exit 1
+          fi
+
+          mapfile -t parts < <(printf '%s\n' "${parts[@]}" | sort -V)
+          printf 'Using fragment: %s\n' "${parts[@]}"
+
+          archive="${RUNNER_TEMP}/super-guan-hao-migration.tar.gz"
+          cat "${parts[@]}" > "${archive}"
+          gzip -t "${archive}"
+
+          restore_dir="${RUNNER_TEMP}/super-guan-hao-restore"
+          mkdir -p "${restore_dir}"
+          tar -xzf "${archive}" -C "${restore_dir}"
+
+          source_dir="${restore_dir}"
+          if [[ ! -f "${source_dir}/package.json" || ! -f "${source_dir}/wrangler.deploy.jsonc" ]]; then
+            source_dir=""
+            while IFS= read -r -d '' config; do
+              candidate="$(dirname "${config}")"
+              if [[ -f "${candidate}/package.json" ]]; then
+                source_dir="${candidate}"
+                break
+              fi
+            done < <(find "${restore_dir}" -type f -name wrangler.deploy.jsonc -print0)
+          fi
+
+          if [[ -z "${source_dir}" || ! -f "${source_dir}/package.json" || ! -f "${source_dir}/wrangler.deploy.jsonc" ]]; then
+            echo "The archive does not contain a valid project root." >&2
+            exit 1
+          fi
+
+          echo "source_dir=${source_dir}" >> "${GITHUB_OUTPUT}"
+          echo "Archive SHA-256: $(sha256sum "${archive}" | cut -d' ' -f1)"
+
+      - name: Restore project without touching Git metadata
+        shell: bash
+        env:
+          SOURCE_DIR: ${{ steps.archive.outputs.source_dir }}
+        run: |
+          set -Eeuo pipefail
+          rsync -a             --exclude='.git/'             --exclude='.github/workflows/restore-site.yml'             --exclude='super-guan-hao-migration.part-*.bin'             "${SOURCE_DIR}/" ./
+
+          test -f package.json
+          test -f wrangler.deploy.jsonc
+          test -d public/guan-hao
+
+          media_count="$(find public/guan-hao -type f | wc -l)"
+          if [[ "${media_count}" -ne 43 ]]; then
+            echo "Expected 43 media files, found ${media_count}." >&2
+            exit 1
+          fi
+          echo "Verified ${media_count} media files."
+
+      - name: Build and test restored project
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Run validation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm ci
+          npm run build
+          npm test -- --run
+
+          large_file="$(find . -path './.git' -prune -o -type f -size +99M -print -quit)"
+          if [[ -n "${large_file}" ]]; then
+            echo "A restored file is too large for normal Git storage: ${large_file}" >&2
+            exit 1
+          fi
+
+      - name: Commit restored source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf node_modules
+          rm -f super-guan-hao-migration.part-*.bin .gitkeep
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing changed; the project is already restored."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Restore Super Guan Hao site source"
+          git push origin HEAD:main
