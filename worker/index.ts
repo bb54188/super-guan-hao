@@ -2,6 +2,9 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 
+const WECHAT_VERIFICATION_PATH = "/fca6cb2f88fa0690d15f0cde3ad718b0.txt";
+const WECHAT_VERIFICATION_VALUE = "21d8b5393838f286c4a5bc799c24ce6302a4301b";
+
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
@@ -28,6 +31,20 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (
+      url.pathname === WECHAT_VERIFICATION_PATH &&
+      (request.method === "GET" || request.method === "HEAD")
+    ) {
+      return new Response(request.method === "HEAD" ? null : WECHAT_VERIFICATION_VALUE, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "public, max-age=300",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
