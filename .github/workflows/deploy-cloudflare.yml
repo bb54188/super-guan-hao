@@ -10,6 +10,7 @@ on:
       - worker/index.ts
       - app/**
       - public/guan-hao/**
+      - .github/workflows/deploy-cloudflare.yml
 
 permissions:
   contents: read
@@ -49,7 +50,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "$(find public/guan-hao -type f | wc -l)" -eq 43
+          media_count="$(find public/guan-hao -type f | wc -l)"
+          test "${media_count}" -ge 43
+          test -f public/guan-hao/zhaojunjie-wechat-quote-2026-08-15.jpg
           npm ci
           npm run build
           npm test -- --run
