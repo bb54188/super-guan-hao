@@ -8,7 +8,7 @@ import handler from "vinext/server/app-router-entry";
 
 const WECHAT_VERIFICATION_PATH = "/fca6cb2f88fa0690d15f0cde3ad718b0.txt";
 const WECHAT_VERIFICATION_VALUE = "21d8b5393838f286c4a5bc799c24ce6302a4301b";
-const REVIEW_TOKEN_HASH = "dc565be1f707b601ac2ef93fea8ac39eb06357034cb86b84d65eb3c5cbc5b7ec";
+const REVIEW_TOKEN_HASH = "bc928f937c635a385ff46581887676fdd70c8fd09a870092a4edf71a12a4420a";
 const SUBMISSION_ROOT = "community/submissions";
 const MAX_UPLOAD_BYTES = 80 * 1024 * 1024;
 const MAX_METADATA_BYTES = 2 * 1024 * 1024;
