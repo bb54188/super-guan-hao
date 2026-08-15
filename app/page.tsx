@@ -229,6 +229,19 @@ export default function Home() {
         <a className="quick-nav-submit" href="/submit">投稿＋</a>
       </nav>
 
+      <aside className="person-page-notice" aria-label="人物个人页面快捷入口">
+        <div className="person-page-notice-copy">
+          <span>重要提示</span>
+          <strong>每个人物都有对应的个人页面，点击即可进入。</strong>
+        </div>
+        <nav className="person-page-quick-links" aria-label="选择人物并进入个人页面">
+          <a href="/people/guan-hao">关昊 <i aria-hidden="true">↗</i></a>
+          <a href="/people/zhao-zixuan">赵梓轩 <i aria-hidden="true">↗</i></a>
+          <a href="/people/yin-haozhe">尹浩哲 <i aria-hidden="true">↗</i></a>
+          <a href="/people/zhao-junjie">赵俊杰 <i aria-hidden="true">↗</i></a>
+        </nav>
+      </aside>
+
       <section className="hero" aria-labelledby="hero-title">
         <div className="hero-copy">
           <p className="eyebrow">

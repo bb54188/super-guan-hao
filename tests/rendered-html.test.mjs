@@ -32,6 +32,27 @@ test("renders development preview metadata", async () => {
   assert.match(await response.text(), developmentPreviewMeta);
 });
 
+test("renders a prominent personal-page notice with direct links", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `person-notice-${process.pid}-${Date.now()}`);
+  const { default: worker } = await import(workerUrl.href);
+  const response = await worker.fetch(
+    new Request("http://localhost/", { headers: { accept: "text/html" } }),
+    {
+      ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
+    },
+    { waitUntil() {}, passThroughOnException() {} },
+  );
+
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /每个人物都有对应的个人页面，点击即可进入/);
+  assert.match(html, /href="\/people\/guan-hao"/);
+  assert.match(html, /href="\/people\/zhao-zixuan"/);
+  assert.match(html, /href="\/people\/yin-haozhe"/);
+  assert.match(html, /href="\/people\/zhao-junjie"/);
+});
+
 test("renders submission page", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `submit-${process.pid}-${Date.now()}`);
