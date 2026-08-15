@@ -51,10 +51,14 @@ test("renders a prominent personal-page notice with direct links", async () => {
   assert.match(html, /href="\/people\/zhao-zixuan"/);
   assert.match(html, /href="\/people\/yin-haozhe"/);
   assert.match(html, /href="\/people\/zhao-junjie"/);
-  assert.match(
-    html,
-    /<video(?=[^>]*data-autoplay-mobile="true")(?=[^>]*\bloop(?:=""|="loop")?)[^>]*>/i,
-  );
+  const returnHomeworkVideo = html.match(
+    /<video(?=[^>]*aria-label="2026年8月1日返校交作业时在走廊遇到关昊的视频")[^>]*>/i,
+  )?.[0];
+  assert.ok(returnHomeworkVideo);
+  assert.match(returnHomeworkVideo, /preload="none"/i);
+  assert.doesNotMatch(returnHomeworkVideo, /\bautoplay\b/i);
+  assert.doesNotMatch(returnHomeworkVideo, /\bloop\b/i);
+  assert.doesNotMatch(returnHomeworkVideo, /data-autoplay-mobile/i);
 });
 
 test("renders submission page", async () => {

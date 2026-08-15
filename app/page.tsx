@@ -583,8 +583,7 @@ export default function Home() {
               sources={returnHomeworkVideoSources}
               poster="/guan-hao/return-homework-2026-08-01-poster.webp"
               ariaLabel="2026年8月1日返校交作业时在走廊遇到关昊的视频"
-              autoPlayOnMobile
-              loop
+              preload="none"
             />
             <span className="video-badge">VIDEO 01</span>
           </div>
