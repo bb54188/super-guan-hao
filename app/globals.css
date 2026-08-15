@@ -951,6 +951,28 @@ img {
   letter-spacing: 0.14em;
 }
 
+.legend-episode-two {
+  position: relative;
+  z-index: 1;
+  margin-top: clamp(88px, 11vw, 150px);
+  padding-top: clamp(42px, 6vw, 76px);
+  border-top: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.legend-episode-two .legend-intro {
+  max-width: 720px;
+  margin-bottom: 42px;
+}
+
+.legend-poster-secondary {
+  aspect-ratio: 4 / 3;
+  transform: rotate(0.28deg);
+}
+
+.legend-poster-secondary:hover {
+  transform: translate(-4px, -4px) rotate(0.28deg);
+}
+
 .quotes {
   position: relative;
   background: var(--green-deep);

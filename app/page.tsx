@@ -102,6 +102,14 @@ const classArchive: FeaturePhoto = {
   note: "某一天的全班合影：一张照片，把整个同班宇宙装进画面。",
 };
 
+const dormVomitNight: FeaturePhoto = {
+  src: "/guan-hao/302-vomit-night.jpg",
+  alt: "AI演绎302宿舍深夜呕吐事件的十二格漫画",
+  kicker: "EPISODE 002 · AI GENERATED",
+  title: "302呕吐之夜",
+  note: "一段发生在302宿舍的深夜校园传说，以十二格漫画形式收录。",
+};
+
 const crewProfiles: Array<
   FeaturePhoto & { index: string; alias: string; role: string; href: string }
 > = [
@@ -438,6 +446,29 @@ export default function Home() {
             图中人物均由 AI 生成，仅用于校园故事的夸张化视觉演绎。
           </p>
           <p>内容以“校园传说”形式呈现，不作为真实影像或事实记录。</p>
+        </div>
+
+        <div className="legend-episode-two">
+          <div className="legend-intro">
+            <span>EPISODE 002 · DORM 302</span>
+            <h3>302呕吐之夜</h3>
+            <p>深夜宿舍里的一场突发事件，被整理成十二格校园传说档案。</p>
+          </div>
+
+          <button
+            className="legend-poster legend-poster-secondary"
+            onClick={() => setFeaturePhoto(dormVomitNight)}
+            aria-label="放大查看302呕吐之夜事件图"
+          >
+            <img
+              src="/guan-hao/302-vomit-night.jpg"
+              alt="AI演绎302宿舍深夜呕吐事件的十二格漫画"
+              width={1536}
+              height={1152}
+              loading="lazy"
+            />
+            <span>点击放大 <b aria-hidden="true">↗</b></span>
+          </button>
         </div>
       </section>
 
