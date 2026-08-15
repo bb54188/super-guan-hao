@@ -3031,6 +3031,126 @@ footer p.photo-credit {
   opacity: 0.7;
 }
 
+.person-photo-series-tabs {
+  margin-bottom: 26px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.person-photo-series-tab {
+  min-height: 176px;
+  padding: 20px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto 1fr auto;
+  gap: 7px 12px;
+  text-align: left;
+  color: var(--paper-soft);
+  background: color-mix(in srgb, var(--ink) 88%, var(--person-deep));
+  border: 2px solid color-mix(in srgb, var(--person-accent) 46%, var(--white));
+  box-shadow: 5px 5px 0 color-mix(in srgb, var(--person-accent) 52%, transparent);
+  cursor: pointer;
+  transition: transform 180ms ease, background-color 180ms ease, color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.person-photo-series-tab:hover,
+.person-photo-series-tab:focus-visible {
+  transform: translate(-2px, -2px);
+  box-shadow: 8px 8px 0 color-mix(in srgb, var(--person-accent) 72%, transparent);
+}
+
+.person-photo-series-tab.is-active {
+  color: var(--ink);
+  background: var(--person-accent);
+  border-color: var(--white);
+  box-shadow: 8px 8px 0 var(--white);
+}
+
+.person-photo-series-tab > span {
+  grid-row: 1 / 4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 900;
+  opacity: 0.7;
+}
+
+.person-photo-series-tab small {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.11em;
+  opacity: 0.66;
+}
+
+.person-photo-series-tab strong {
+  align-self: end;
+  font-size: clamp(22px, 2.2vw, 34px);
+  font-weight: 950;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.person-photo-series-tab em {
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 850;
+  opacity: 0.62;
+}
+
+.person-photo-series-panel {
+  padding: clamp(22px, 3vw, 38px);
+  background: color-mix(in srgb, var(--person-deep) 34%, transparent);
+  border: 1px solid color-mix(in srgb, var(--person-accent) 58%, transparent);
+}
+
+.person-photo-series-summary {
+  margin-bottom: 28px;
+  padding-bottom: 24px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 28px;
+  border-bottom: 1px solid color-mix(in srgb, var(--person-accent) 55%, transparent);
+}
+
+.person-photo-series-summary div {
+  display: grid;
+  gap: 8px;
+}
+
+.person-photo-series-summary small,
+.person-photo-series-summary > span {
+  color: var(--person-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
+
+.person-photo-series-summary strong {
+  color: var(--white);
+  font-size: clamp(34px, 4.5vw, 64px);
+  font-weight: 950;
+  letter-spacing: -0.035em;
+  line-height: 1;
+}
+
+.person-photo-series-summary p {
+  max-width: 690px;
+  margin: 0;
+  color: var(--paper-soft);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.75;
+  opacity: 0.68;
+}
+
+.person-photo-series-summary > span {
+  white-space: nowrap;
+}
+
 .person-photo-gallery-grid {
   columns: 3;
   column-gap: 20px;
@@ -3422,6 +3542,10 @@ footer p.photo-credit {
 
   .person-photo-gallery-grid {
     columns: 2;
+  }
+
+  .person-photo-series-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .person-video-gallery-grid {
@@ -3959,6 +4083,39 @@ footer p.photo-credit {
     padding: 17px 0 0;
     border-top: 3px solid var(--person-accent);
     border-left: 0;
+  }
+
+  .person-photo-series-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .person-photo-series-tab {
+    min-height: 152px;
+    padding: 17px 14px;
+    gap: 7px 9px;
+    box-shadow: 4px 4px 0 color-mix(in srgb, var(--person-accent) 52%, transparent);
+  }
+
+  .person-photo-series-tab.is-active {
+    box-shadow: 5px 5px 0 var(--white);
+  }
+
+  .person-photo-series-tab strong {
+    font-size: 24px;
+  }
+
+  .person-photo-series-panel {
+    padding: 18px;
+  }
+
+  .person-photo-series-summary {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .person-photo-series-summary > span {
+    justify-self: start;
   }
 
   .person-photo-gallery-grid {

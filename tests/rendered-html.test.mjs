@@ -49,6 +49,30 @@ test("renders submission page", async () => {
   assert.match(html, /投稿人/);
 });
 
+test("renders Zhao Junjie photo series controls", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `zhao-series-${process.pid}-${Date.now()}`);
+  const { default: worker } = await import(workerUrl.href);
+  const response = await worker.fetch(
+    new Request("http://localhost/people/zhao-junjie", {
+      headers: { accept: "text/html" },
+    }),
+    {
+      ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
+    },
+    { waitUntil() {}, passThroughOnException() {} },
+  );
+
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /清晨洗头/);
+  assert.match(html, /床铺游戏/);
+  assert.match(html, /床铺肖像/);
+  assert.match(html, /校园同框/);
+  assert.match(html, /聊天记录/);
+  assert.match(html, /aria-pressed="true"/);
+});
+
 test("accepts a valid story submission into pending storage", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `api-${process.pid}-${Date.now()}`);

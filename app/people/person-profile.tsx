@@ -1,6 +1,11 @@
 /* eslint-disable @next/next/no-html-link-for-pages */
 
 import { QualityVideo, type VideoQualitySource } from "../components/quality-video";
+import {
+  PhotoSeriesGallery,
+  type PersonPhoto,
+  type PersonPhotoSeries,
+} from "./components/photo-series-gallery";
 
 type PersonMedia =
   | {
@@ -20,14 +25,6 @@ type PersonMedia =
       title: string;
       note: string;
     };
-
-type PersonPhoto = {
-  src: string;
-  alt: string;
-  eyebrow: string;
-  title: string;
-  note: string;
-};
 
 type PersonVideo = {
   sources: VideoQualitySource[];
@@ -77,6 +74,8 @@ export type PersonProfileData = {
   videos?: PersonVideo[];
   videoArchiveNote?: string;
   gallery?: PersonPhoto[];
+  gallerySeries?: PersonPhotoSeries[];
+  galleryArchiveNote?: string;
   article?: PersonArticle;
 };
 
@@ -271,34 +270,12 @@ export function PersonProfile({ profile }: { profile: PersonProfileData }) {
         )}
 
         {!!profile.gallery?.length && (
-          <section className="person-photo-gallery" aria-labelledby="person-photo-gallery-title">
-            <header>
-              <div>
-                <p className="section-kicker">PERSONAL PHOTO ARCHIVE</p>
-                <h3 id="person-photo-gallery-title">{profile.name}个人影像册。</h3>
-              </div>
-              <p>清晨抓拍、宿舍日常与校园片段，点击照片可查看完整画面。</p>
-            </header>
-            <div className="person-photo-gallery-grid">
-              {profile.gallery.map((photo, index) => (
-                <figure className="person-gallery-card" key={photo.src}>
-                  <a
-                    href={photo.src}
-                    target="_blank"
-                    rel="noreferrer"
-                    aria-label={`查看${photo.title}完整照片`}
-                  >
-                    <img src={photo.src} alt={photo.alt} loading={index > 2 ? "lazy" : "eager"} />
-                    <span>{photo.eyebrow}</span>
-                  </a>
-                  <figcaption>
-                    <strong>{photo.title}</strong>
-                    <p>{photo.note}</p>
-                  </figcaption>
-                </figure>
-              ))}
-            </div>
-          </section>
+          <PhotoSeriesGallery
+            name={profile.name}
+            photos={profile.gallery}
+            series={profile.gallerySeries}
+            archiveNote={profile.galleryArchiveNote}
+          />
         )}
 
         {!profile.media && !profile.videos?.length && !profile.gallery?.length && (

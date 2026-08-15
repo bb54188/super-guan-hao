@@ -115,6 +115,39 @@ const profile: PersonProfileData = {
       ],
     },
   ],
+  galleryArchiveNote: "12 张图片已按场景与内容整理为 5 个系列；点击系列名称即可查看该组全部画面。",
+  gallerySeries: [
+    {
+      id: "wet-hair",
+      eyebrow: "MORNING ROUTINE",
+      title: "清晨洗头",
+      description: "同一清晨、同一宿舍机位连续记录的三张生活画面。",
+    },
+    {
+      id: "bedside-gaming",
+      eyebrow: "BEDSIDE SESSION",
+      title: "床铺游戏",
+      description: "床铺边的近距离抓拍、失焦动作与专注游戏画面组成的一组连续记录。",
+    },
+    {
+      id: "dorm-portraits",
+      eyebrow: "DORM PORTRAITS",
+      title: "床铺肖像",
+      description: "躺卧、对视与超近距离镜头组成的宿舍肖像组。",
+    },
+    {
+      id: "campus-duo",
+      eyebrow: "CAMPUS ENCOUNTER",
+      title: "校园同框",
+      description: "校园走廊中与褚海旭同框的独立记录。",
+    },
+    {
+      id: "quote-log",
+      eyebrow: "CHAT ARCHIVE",
+      title: "聊天记录",
+      description: "关于人物名言收录过程的微信聊天截图。",
+    },
+  ],
   gallery: [
     {
       src: "/guan-hao/zhaojunjie-wechat-quote-2026-08-15.jpg",
@@ -122,6 +155,7 @@ const profile: PersonProfileData = {
       eyebrow: "WECHAT LOG · 2026.08.15",
       title: "名言收录现场",
       note: "微信聊天记录截图，作为赵俊杰个人页面的新影像归档。",
+      series: "quote-log",
     },
     {
       src: "/guan-hao/zhaojunjie-with-chu-haixu-2026-07-09.webp",
@@ -129,6 +163,7 @@ const profile: PersonProfileData = {
       eyebrow: "CAMPUS DUO · 2026.07.09",
       title: "褚海旭与赵俊杰",
       note: "校园走廊中的同框抓拍，作为两位同学共同出现的影像归入赵俊杰个人页。",
+      series: "campus-duo",
     },
     {
       src: "/guan-hao/daily-zhaojunjie-wet-hair.webp",
@@ -136,6 +171,7 @@ const profile: PersonProfileData = {
       eyebrow: "WET HAIR · 01",
       title: "洗完头后 · 第一幕",
       note: "宿舍清晨，刚洗完头后的生活化定格。",
+      series: "wet-hair",
     },
     {
       src: "/guan-hao/zhaojunjie-wet-hair-02.webp",
@@ -143,6 +179,7 @@ const profile: PersonProfileData = {
       eyebrow: "WET HAIR · 02",
       title: "洗完头后 · 第二幕",
       note: "从上铺视角留下的清晨抓拍。",
+      series: "wet-hair",
     },
     {
       src: "/guan-hao/zhaojunjie-wet-hair-03.webp",
@@ -150,6 +187,7 @@ const profile: PersonProfileData = {
       eyebrow: "WET HAIR · 03",
       title: "洗完头后 · 第三幕",
       note: "同一清晨的另一瞬间，继续归入洗头系列。",
+      series: "wet-hair",
     },
     {
       src: "/guan-hao/zhaojunjie-daily-01.webp",
@@ -157,6 +195,7 @@ const profile: PersonProfileData = {
       eyebrow: "DORM LIFE · 01",
       title: "靠近镜头",
       note: "镜头突然拉近，留下带着广角感的日常画面。",
+      series: "bedside-gaming",
     },
     {
       src: "/guan-hao/zhaojunjie-daily-02.webp",
@@ -164,6 +203,7 @@ const profile: PersonProfileData = {
       eyebrow: "DORM LIFE · 02",
       title: "失焦一瞬",
       note: "动作先于快门，模糊也成为现场感的一部分。",
+      series: "bedside-gaming",
     },
     {
       src: "/guan-hao/zhaojunjie-daily-03.webp",
@@ -171,6 +211,7 @@ const profile: PersonProfileData = {
       eyebrow: "DORM LIFE · 03",
       title: "游戏进行时",
       note: "横握设备、专注屏幕，和本页视频属于同一组宿舍记录。",
+      series: "bedside-gaming",
     },
     {
       src: "/guan-hao/zhaojunjie-daily-04.webp",
@@ -178,6 +219,7 @@ const profile: PersonProfileData = {
       eyebrow: "DORM LIFE · 04",
       title: "专注时刻",
       note: "低机位记录下的一次安静专注。",
+      series: "bedside-gaming",
     },
     {
       src: "/guan-hao/zhaojunjie-daily-05.webp",
@@ -185,6 +227,7 @@ const profile: PersonProfileData = {
       eyebrow: "DORM LIFE · 05",
       title: "床铺边的定格",
       note: "偏冷色的宿舍光线里，一次松弛的镜头对视。",
+      series: "dorm-portraits",
     },
     {
       src: "/guan-hao/zhaojunjie-daily-06.webp",
@@ -192,6 +235,7 @@ const profile: PersonProfileData = {
       eyebrow: "DORM LIFE · 06",
       title: "超近距离",
       note: "广角镜头下，画面被眼神完全占据。",
+      series: "dorm-portraits",
     },
     {
       src: "/guan-hao/zhaojunjie-daily-07.webp",
@@ -199,6 +243,7 @@ const profile: PersonProfileData = {
       eyebrow: "DORM LIFE · 07",
       title: "靠墙片刻",
       note: "一天中的短暂停顿，被镜头安静收录。",
+      series: "dorm-portraits",
     },
   ],
 };
