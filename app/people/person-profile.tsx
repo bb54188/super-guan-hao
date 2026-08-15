@@ -67,6 +67,7 @@ export type PersonProfileData = {
   alias: string;
   role: string;
   intro: string;
+  quote?: string;
   portrait: string;
   portraitAlt: string;
   theme: "guan" | "football" | "nailong" | "bg";
@@ -104,6 +105,12 @@ export function PersonProfile({ profile }: { profile: PersonProfileData }) {
           <p className="person-roman">{profile.romanName}</p>
           <p className="person-alias">代号「{profile.alias}」</p>
           <p className="person-intro">{profile.intro}</p>
+          {profile.quote && (
+            <blockquote className="person-signature-quote">
+              <span>人物名言</span>
+              <strong>“{profile.quote}”</strong>
+            </blockquote>
+          )}
           <ul className="person-tags" aria-label="人物标签">
             {profile.tags.map((tag) => <li key={tag}>{tag}</li>)}
           </ul>
@@ -315,6 +322,7 @@ export function PersonProfile({ profile }: { profile: PersonProfileData }) {
         <a href="/">超级大关昊</a>
         <p>非官方校园影像档案 · 仅供同学间欣赏</p>
         <p>© 2026 CHARACTER ARCHIVE</p>
+        <p className="photo-credit">照片由千秋雯提供</p>
       </footer>
     </main>
   );

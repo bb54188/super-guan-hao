@@ -13,6 +13,7 @@ const profile: PersonProfileData = {
   alias: "BG / 鸡摸 / 金八",
   role: "多重代号持有者",
   intro: "与关昊高频交锋的另一位选手，多个代号随时切换，日常状态也被单独收录。",
+  quote: "像臭gay",
   portrait: "/guan-hao/cast-bg.webp",
   portraitAlt: "赵俊杰的头像照片",
   theme: "bg",
@@ -115,6 +116,13 @@ const profile: PersonProfileData = {
     },
   ],
   gallery: [
+    {
+      src: "/guan-hao/zhaojunjie-wechat-quote-2026-08-15.jpg",
+      alt: "关于赵俊杰名言收录的微信聊天截图",
+      eyebrow: "WECHAT LOG · 2026.08.15",
+      title: "名言收录现场",
+      note: "微信聊天记录截图，作为赵俊杰个人页面的新影像归档。",
+    },
     {
       src: "/guan-hao/zhaojunjie-with-chu-haixu-2026-07-09.webp",
       alt: "褚海旭和赵俊杰在校园走廊里的照片",

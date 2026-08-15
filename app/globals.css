@@ -2181,6 +2181,13 @@ footer p:last-child {
   justify-self: end;
 }
 
+footer p.photo-credit {
+  grid-column: 1 / -1;
+  justify-self: center;
+  padding-top: 8px;
+  opacity: 0.78;
+}
+
 .person-page {
   --person-accent: var(--acid);
   --person-deep: var(--green-deep);
@@ -2192,6 +2199,34 @@ footer p:last-child {
 .person-theme-football {
   --person-accent: #ffd84a;
   --person-deep: #183f35;
+}
+
+.person-signature-quote {
+  width: min(100%, 560px);
+  margin: 28px 0 0;
+  padding: 18px 20px;
+  display: grid;
+  gap: 8px;
+  border: 2px solid var(--ink);
+  border-left: 10px solid var(--person-accent);
+  background: var(--white);
+  box-shadow: 8px 8px 0 var(--ink);
+}
+
+.person-signature-quote span {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.person-signature-quote strong {
+  font-size: clamp(24px, 3vw, 42px);
+  font-style: normal;
+  font-weight: 950;
+  letter-spacing: -0.04em;
 }
 
 .person-theme-nailong {

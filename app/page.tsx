@@ -652,6 +652,7 @@ export default function Home() {
         </a>
         <p>非官方校园影像档案 · 仅供同学间欣赏</p>
         <p>© 2026 GUAN HAO ARCHIVE</p>
+        <p className="photo-credit">照片由千秋雯提供</p>
       </footer>
 
       {activePhoto && lightboxIndex !== null && (
