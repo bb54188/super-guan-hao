@@ -51,6 +51,10 @@ test("renders a prominent personal-page notice with direct links", async () => {
   assert.match(html, /href="\/people\/zhao-zixuan"/);
   assert.match(html, /href="\/people\/yin-haozhe"/);
   assert.match(html, /href="\/people\/zhao-junjie"/);
+  assert.match(
+    html,
+    /<video(?=[^>]*data-autoplay-mobile="true")(?=[^>]*\bloop(?:=""|="loop")?)[^>]*>/i,
+  );
 });
 
 test("renders submission page", async () => {
@@ -69,6 +73,8 @@ test("renders submission page", async () => {
   assert.match(html, /把新的/);
   assert.match(html, /投稿人/);
   assert.match(html, /自动识别/);
+  assert.match(html, /可以简短填写/);
+  assert.doesNotMatch(html, /minlength=["']10["']/i);
 });
 
 test("renders Zhao Junjie photo series controls", async () => {
@@ -95,7 +101,7 @@ test("renders Zhao Junjie photo series controls", async () => {
   assert.match(html, /aria-pressed="true"/);
 });
 
-test("accepts a valid story submission into pending storage", async () => {
+test("accepts a one-character description into pending storage", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `api-${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
@@ -103,7 +109,7 @@ test("accepts a valid story submission into pending storage", async () => {
   const body = JSON.stringify({
     category: "story",
     title: "测试校园事迹",
-    description: "这是一条用于自动验证投稿审核流程的校园事迹内容。",
+    description: "短",
     submitter: "测试投稿人",
     agreement: true,
   });
@@ -133,10 +139,11 @@ test("accepts a valid story submission into pending storage", async () => {
   assert.equal(response.status, 201);
   const result = await response.json();
   assert.equal(result.ok, true);
-  assert.equal(
-    [...stored.keys()].some((key) => key.includes("/pending/") && key.endsWith(".json")),
-    true,
+  const pendingEntry = [...stored.entries()].find(
+    ([key]) => key.includes("/pending/") && key.endsWith(".json"),
   );
+  assert.ok(pendingEntry);
+  assert.equal(JSON.parse(pendingEntry[1]).description, "短");
 });
 
 test("streams an accepted media upload into R2", async () => {

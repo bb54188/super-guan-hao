@@ -14,6 +14,7 @@ type QualityVideoProps = {
   poster: string;
   ariaLabel: string;
   loop?: boolean;
+  autoPlayOnMobile?: boolean;
 };
 
 type ConnectionInfo = {
@@ -65,7 +66,13 @@ function chooseAutomaticSource(sources: VideoQualitySource[]) {
   return fallback;
 }
 
-export function QualityVideo({ sources, poster, ariaLabel, loop = false }: QualityVideoProps) {
+export function QualityVideo({
+  sources,
+  poster,
+  ariaLabel,
+  loop = false,
+  autoPlayOnMobile = false,
+}: QualityVideoProps) {
   const orderedSources = useMemo(
     () => [...sources].sort((left, right) => right.height - left.height),
     [sources],
@@ -75,6 +82,7 @@ export function QualityVideo({ sources, poster, ariaLabel, loop = false }: Quali
   const [activeSource, setActiveSource] = useState(initialSource);
   const videoRef = useRef<HTMLVideoElement>(null);
   const resumeRef = useRef<ResumeState | null>(null);
+  const mobileAutoplayAttemptedRef = useRef(false);
 
   const switchSource = useCallback((nextSource: VideoQualitySource) => {
     setActiveSource((currentSource) => {
@@ -125,6 +133,31 @@ export function QualityVideo({ sources, poster, ariaLabel, loop = false }: Quali
     return () => connection?.removeEventListener?.("change", updateAutomaticQuality);
   }, [mode, orderedSources, switchSource]);
 
+  useEffect(() => {
+    if (!autoPlayOnMobile || mobileAutoplayAttemptedRef.current) return;
+
+    const mobileViewport = window.matchMedia("(max-width: 900px)").matches;
+    const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
+    if (!mobileViewport && !coarsePointer) return;
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    mobileAutoplayAttemptedRef.current = true;
+    video.autoplay = true;
+    video.defaultMuted = true;
+    video.muted = true;
+
+    const startPlayback = () => {
+      void video.play().catch(() => undefined);
+    };
+
+    startPlayback();
+    video.addEventListener("canplay", startPlayback, { once: true });
+
+    return () => video.removeEventListener("canplay", startPlayback);
+  }, [autoPlayOnMobile]);
+
   const handleQualityChange = (nextMode: string) => {
     setMode(nextMode);
     if (nextMode === "auto") {
@@ -143,6 +176,7 @@ export function QualityVideo({ sources, poster, ariaLabel, loop = false }: Quali
         controls
         playsInline
         loop={loop}
+        data-autoplay-mobile={autoPlayOnMobile ? "true" : undefined}
         preload="metadata"
         poster={poster}
         aria-label={ariaLabel}

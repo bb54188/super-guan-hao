@@ -211,11 +211,10 @@ export default function SubmitPage() {
             <span>内容说明 *</span>
             <textarea
               name="description"
-              minLength={10}
               maxLength={2000}
               required
               rows={7}
-              placeholder="说明发生了什么、人物是谁、素材拍摄时间等……"
+              placeholder="可以简短填写：发生了什么、人物是谁或素材拍摄时间等……"
             />
           </label>
 

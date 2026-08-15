@@ -582,7 +582,7 @@ async function createSubmission(request: Request, env: WorkerEnv): Promise<Respo
   if (!isCategory(categoryValue)) {
     return json({ error: "请选择图片、视频或事迹分类。" }, 400);
   }
-  if (title.length < 2 || description.length < 10 || submitter.length < 2) {
+  if (title.length < 2 || !description || submitter.length < 2) {
     return json({ error: "请完整填写标题、内容和投稿人。" }, 400);
   }
   if (!agreement) {
