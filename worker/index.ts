@@ -712,16 +712,33 @@ async function listApproved(request: Request, env: WorkerEnv): Promise<Response>
 
 function rangeHeaders(object: R2ObjectBody, headers: Headers): number {
   headers.set("Accept-Ranges", "bytes");
-  if (!object.range) return 200;
+  const range = object.range;
+  if (!range) {
+    headers.set("Content-Length", String(object.size));
+    return 200;
+  }
+
+  const suffix =
+    "suffix" in range && typeof range.suffix === "number"
+      ? range.suffix
+      : undefined;
   let offset = 0;
   let length = object.size;
-  if ("suffix" in object.range) {
-    length = Math.min(object.range.suffix, object.size);
+
+  if (suffix !== undefined) {
+    length = Math.min(Math.max(suffix, 0), object.size);
     offset = object.size - length;
   } else {
-    offset = object.range.offset ?? 0;
-    length = object.range.length ?? object.size - offset;
+    const requestedOffset =
+      "offset" in range && typeof range.offset === "number" ? range.offset : 0;
+    const requestedLength =
+      "length" in range && typeof range.length === "number"
+        ? range.length
+        : object.size - requestedOffset;
+    offset = Math.min(Math.max(requestedOffset, 0), object.size);
+    length = Math.min(Math.max(requestedLength, 0), object.size - offset);
   }
+
   headers.set("Content-Range", `bytes ${offset}-${offset + length - 1}/${object.size}`);
   headers.set("Content-Length", String(length));
   return 206;
@@ -734,9 +751,11 @@ async function serveMedia(
   isPublic: boolean,
 ): Promise<Response> {
   if (!record.mediaKey) return json({ error: "该投稿没有上传媒体文件。" }, 404);
-  const object = await env.MEDIA.get(record.mediaKey, {
-    range: request.headers,
-  });
+  const rangeHeader = request.headers.get("range");
+  const object = await env.MEDIA.get(
+    record.mediaKey,
+    rangeHeader ? { range: request.headers } : undefined,
+  );
   if (!object) return json({ error: "媒体文件不存在。" }, 404);
   const headers = new Headers();
   object.writeHttpMetadata(headers);

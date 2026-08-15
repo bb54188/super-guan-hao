@@ -150,6 +150,60 @@ test("accepts a one-character description into pending storage", async () => {
   assert.equal(JSON.parse(pendingEntry[1]).description, "短");
 });
 
+
+test("serves valid byte ranges for submitted video", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `range-${process.pid}-${Date.now()}`);
+  const { default: worker } = await import(workerUrl.href);
+  const id = "c5e79d30-ca4f-4dfd-be2d-85c0aa6396c9";
+  const mediaKey = "community/submissions/media/video.mp4";
+  const record = {
+    id,
+    category: "video",
+    title: "测试视频",
+    description: "短",
+    submitter: "测试投稿人",
+    createdAt: new Date().toISOString(),
+    status: "approved",
+    mediaKey,
+    mediaType: "video/mp4",
+    mediaName: "video.mp4",
+  };
+  const response = await worker.fetch(
+    new Request(`http://localhost/api/submissions/${id}/media`, {
+      headers: { Range: "bytes=0-3" },
+    }),
+    {
+      ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
+      MEDIA: {
+        get: async (key) => {
+          if (key.endsWith(`/approved/${id}.json`)) {
+            return { json: async () => record };
+          }
+          if (key === mediaKey) {
+            return {
+              size: 10,
+              range: { offset: 0, length: 4, suffix: undefined },
+              httpEtag: '"test-etag"',
+              body: new Blob(["0123"]).stream(),
+              writeHttpMetadata(headers) {
+                headers.set("Content-Type", "video/mp4");
+              },
+            };
+          }
+          return null;
+        },
+      },
+    },
+    { waitUntil() {}, passThroughOnException() {} },
+  );
+
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get("content-range"), "bytes 0-3/10");
+  assert.equal(response.headers.get("content-length"), "4");
+  assert.equal(await response.text(), "0123");
+});
+
 test("streams an accepted media upload into R2", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `upload-${process.pid}-${Date.now()}`);
