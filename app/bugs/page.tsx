@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useMemo, useState, useSyncExternalStore } from "r
 
 type BugStatus =
   | "waiting-setup"
+  | "needs-approval"
   | "queued"
   | "analyzing"
   | "testing"
@@ -30,6 +31,7 @@ type Tracking = {
 const STORAGE_KEY = "super-guan-hao-last-bug";
 const terminalStatuses = new Set<BugStatus>([
   "waiting-setup",
+  "needs-approval",
   "patch-ready",
   "needs-review",
   "failed",
@@ -37,6 +39,7 @@ const terminalStatuses = new Set<BugStatus>([
 
 const statusLabels: Record<BugStatus, string> = {
   "waiting-setup": "等待启用",
+  "needs-approval": "等待管理员确认",
   queued: "已排队",
   analyzing: "正在分析",
   testing: "自动测试",
@@ -47,13 +50,14 @@ const statusLabels: Record<BugStatus, string> = {
 
 const stages = [
   "保存报告",
-  "ChatGPT 分析",
+  "DeepSeek 分析",
   "构建与测试",
   "修复提案",
 ] as const;
 
 const completedStageCount: Record<BugStatus, number> = {
   "waiting-setup": 1,
+  "needs-approval": 1,
   queued: 1,
   analyzing: 2,
   testing: 3,
@@ -168,7 +172,7 @@ export default function BugReportPage() {
     const form = event.currentTarget;
     const formData = new FormData(form);
     setSubmitting(true);
-    setMessage("正在保存报告并建立修复任务……");
+    setMessage("正在保存报告……");
 
     try {
       const response = await fetch("/api/bugs", {
@@ -244,9 +248,9 @@ export default function BugReportPage() {
       </nav>
 
       <header className="community-hero bug-hero">
-        <p className="section-kicker">BUG REPORT · CHATGPT AUTOFIX</p>
-        <h1>发现问题，<br />交给 ChatGPT。</h1>
-        <p>提交后系统会保存报告、自动分析并尝试生成最小修复。修复必须先通过构建与测试，之后才会形成供管理员确认的修复提案。</p>
+        <p className="section-kicker">BUG REPORT · DEEPSEEK AUTOFIX</p>
+        <h1>发现问题，<br />交给 DeepSeek。</h1>
+        <p>提交后系统会先保存报告。只有管理员确认后才会调用 DeepSeek 并产生 API 费用；候选修复必须通过构建与测试，之后只形成供管理员确认的草稿提案。</p>
         <div className="community-process" aria-label="Bug 自动修复流程">
           <span><b>01</b> 提交报告</span>
           <span><b>02</b> 自动分析</span>
@@ -342,7 +346,7 @@ export default function BugReportPage() {
 
               <label className="submission-agreement">
                 <input name="agreement" type="checkbox" value="yes" required />
-                <span>我确认反馈中不含账号、口令、Token 或其他敏感信息，并同意将问题说明和设备信息交给 ChatGPT 处理；联系方式不会发送给 ChatGPT。</span>
+                <span>我确认反馈中不含账号、口令、Token 或其他敏感信息，并同意在管理员确认后将问题说明和设备信息交给 DeepSeek 处理；联系方式不会发送给 DeepSeek。</span>
               </label>
 
               <label className="submission-honeypot" aria-hidden="true">
@@ -350,7 +354,7 @@ export default function BugReportPage() {
               </label>
 
               <button className="submission-submit" type="submit" disabled={submitting}>
-                {submitting ? "正在建立修复任务" : "提交 Bug 并自动分析"}
+                {submitting ? "正在保存 Bug" : "提交 Bug，等待管理员确认"}
                 <span aria-hidden="true">↗</span>
               </button>
               {message && <p className="submission-status status-sending" role="status">{message}</p>}
