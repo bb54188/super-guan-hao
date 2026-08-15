@@ -2,7 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "super-guan-hao",
   "main": "./dist/server/index.js",
-  "compatibility_date": "2026-08-14",
+  "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "routes": [
@@ -15,6 +15,12 @@
     "binding": "ASSETS",
     "directory": "./dist/client"
   },
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "super-guan-hao-media"
+    }
+  ],
   "observability": {
     "enabled": true
   }

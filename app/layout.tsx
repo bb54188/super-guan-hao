@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "超级大关昊",
-  description: "关昊校园人物档案：二十二张照片、三段校园影像、六条名言、AI演绎传奇事件与可跳转的24级四班人物图鉴。",
+  description: "关昊校园人物档案：照片、视频、人物事迹、AI演绎传奇事件，以及支持审核发布的校园投稿区。",
   other: {
     "codex-preview": "development",
   },

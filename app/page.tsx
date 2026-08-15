@@ -209,15 +209,24 @@ export default function Home() {
         </a>
         <div className="nav-links">
           <a href="#profile">人物</a>
-          <a href="#legend">传奇</a>
+          <a href="#legend">事迹</a>
           <a href="#quotes">名言</a>
-          <a href="#gallery">影像</a>
+          <a href="#gallery">图片</a>
           <a href="#video">视频</a>
-          <a href="#crew">同班</a>
+          <a href="/submissions">投稿区</a>
         </div>
-        <a className="nav-cta" href="#quotes">
-          今日语录 <span aria-hidden="true">↘</span>
+        <a className="nav-cta" href="/submit">
+          我要投稿 <span aria-hidden="true">↗</span>
         </a>
+      </nav>
+
+      <nav className="quick-nav" aria-label="一键导航">
+        <span>快速导航</span>
+        <a href="#legend">事迹</a>
+        <a href="#gallery">图片</a>
+        <a href="#video">视频</a>
+        <a href="/submissions">投稿区</a>
+        <a className="quick-nav-submit" href="/submit">投稿＋</a>
       </nav>
 
       <section className="hero" aria-labelledby="hero-title">

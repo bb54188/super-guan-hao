@@ -8,6 +8,8 @@ on:
     paths:
       - public/fca6cb2f88fa0690d15f0cde3ad718b0.txt
       - worker/index.ts
+      - wrangler.deploy.jsonc
+      - tests/**
       - app/**
       - public/guan-hao/**
       - .github/workflows/deploy-cloudflare.yml
@@ -94,4 +96,12 @@ jobs:
           verification="$(curl --fail --silent --show-error --max-time 30 \
             https://guanhao.johncat.top/fca6cb2f88fa0690d15f0cde3ad718b0.txt)"
           [[ "${verification}" == "21d8b5393838f286c4a5bc799c24ce6302a4301b" ]]
-          echo "Production domain, sample media, and WeChat verification file verified."
+          submit_page="$(curl --fail --silent --show-error --max-time 30 \
+            https://guanhao.johncat.top/submit)"
+          grep -Fq "投稿" <<<"${submit_page}"
+
+          submissions_json="$(curl --fail --silent --show-error --max-time 30 \
+            https://guanhao.johncat.top/api/submissions)"
+          grep -Fq '"submissions"' <<<"${submissions_json}"
+
+          echo "Production domain, media, submission pages, R2 API, and WeChat verification file verified."
