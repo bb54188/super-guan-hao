@@ -85,6 +85,203 @@ test("renders submission page", async () => {
   assert.doesNotMatch(html, /minlength=["']10["']/i);
 });
 
+test("renders the ChatGPT bug feedback page", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `bugs-${process.pid}-${Date.now()}`);
+  const { default: worker } = await import(workerUrl.href);
+  const response = await worker.fetch(
+    new Request("http://localhost/bugs", { headers: { accept: "text/html" } }),
+    {
+      ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
+    },
+    { waitUntil() {}, passThroughOnException() {} },
+  );
+
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /发现问题/);
+  assert.match(html, /交给 ChatGPT/);
+  assert.match(html, /提交 Bug 并自动分析/);
+  assert.match(html, /name="steps"/);
+  assert.match(html, /name="actual"/);
+  assert.match(html, /不含账号、口令、Token/);
+  assert.match(html, /联系方式不会发送给 ChatGPT/);
+});
+
+test("stores a private bug report and protects its progress token", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `bug-api-${process.pid}-${Date.now()}`);
+  const { default: worker } = await import(workerUrl.href);
+  const stored = new Map();
+  const media = {
+    put: async (key, value) => {
+      stored.set(key, typeof value === "string" ? value : await new Response(value).text());
+      return {};
+    },
+    get: async (key) => {
+      const value = stored.get(key);
+      return value === undefined ? null : { json: async () => JSON.parse(value) };
+    },
+  };
+  const body = JSON.stringify({
+    title: "首页视频异常播放",
+    pagePath: "/",
+    steps: "打开首页后不点击任何视频。",
+    expected: "视频保持暂停。",
+    actual: "视频自动开始播放。",
+    environment: "测试浏览器",
+    agreement: true,
+  });
+
+  const response = await worker.fetch(
+    new Request("http://localhost/api/bugs", {
+      method: "POST",
+      headers: {
+        "content-length": String(new TextEncoder().encode(body).byteLength),
+        "content-type": "application/json",
+      },
+      body,
+    }),
+    {
+      ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
+      MEDIA: media,
+    },
+    { waitUntil() {}, passThroughOnException() {} },
+  );
+
+  assert.equal(response.status, 202);
+  const result = await response.json();
+  assert.equal(result.status, "waiting-setup");
+  assert.match(result.trackingToken, /^[0-9a-f]{64}$/i);
+  assert.equal("callbackToken" in result, false);
+  const reportEntry = [...stored.entries()].find(([key]) => key.includes("/bugs/reports/"));
+  assert.ok(reportEntry);
+  const report = JSON.parse(reportEntry[1]);
+  assert.equal(report.actual, "视频自动开始播放。");
+  assert.notEqual(report.statusTokenHash, result.trackingToken);
+  assert.equal("callbackToken" in report, false);
+
+  const unauthorized = await worker.fetch(
+    new Request(`http://localhost/api/bugs/${result.id}/status`),
+    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) }, MEDIA: media },
+    { waitUntil() {}, passThroughOnException() {} },
+  );
+  assert.equal(unauthorized.status, 401);
+
+  const statusResponse = await worker.fetch(
+    new Request(`http://localhost/api/bugs/${result.id}/status`, {
+      headers: { Authorization: `Bearer ${result.trackingToken}` },
+    }),
+    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) }, MEDIA: media },
+    { waitUntil() {}, passThroughOnException() {} },
+  );
+  assert.equal(statusResponse.status, 200);
+  const statusResult = await statusResponse.json();
+  assert.equal(statusResult.report.status, "waiting-setup");
+  assert.equal("steps" in statusResult.report, false);
+  assert.equal("contact" in statusResult.report, false);
+});
+
+test("dispatches an enabled bug autofix and accepts only its scoped callback", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `bug-dispatch-${process.pid}-${Date.now()}`);
+  const { default: worker } = await import(workerUrl.href);
+  const stored = new Map();
+  const background = [];
+  const media = {
+    put: async (key, value) => {
+      stored.set(key, typeof value === "string" ? value : await new Response(value).text());
+      return {};
+    },
+    get: async (key) => {
+      const value = stored.get(key);
+      return value === undefined ? null : { json: async () => JSON.parse(value) };
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  let dispatchedPayload;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, "https://api.github.com/repos/bb54188/super-guan-hao/dispatches");
+    assert.equal(init.headers.Authorization, "Bearer test-github-token");
+    dispatchedPayload = JSON.parse(init.body);
+    return new Response(null, { status: 204 });
+  };
+
+  try {
+    const body = JSON.stringify({
+      title: "投稿视频不能播放",
+      pagePath: "/submissions",
+      steps: "打开投稿区并点击视频播放。",
+      expected: "视频可以播放。",
+      actual: "播放器显示错误。",
+      environment: "测试浏览器",
+      agreement: true,
+    });
+    const env = {
+      ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
+      MEDIA: media,
+      GITHUB_AUTOFIX_TOKEN: "test-github-token",
+    };
+    const context = {
+      waitUntil(promise) { background.push(promise); },
+      passThroughOnException() {},
+    };
+    const response = await worker.fetch(
+      new Request("http://localhost/api/bugs", {
+        method: "POST",
+        headers: {
+          "content-length": String(new TextEncoder().encode(body).byteLength),
+          "content-type": "application/json",
+        },
+        body,
+      }),
+      env,
+      context,
+    );
+    assert.equal(response.status, 202);
+    const result = await response.json();
+    assert.equal(result.status, "queued");
+    assert.equal(background.length, 1);
+    await Promise.all(background);
+    assert.equal(dispatchedPayload.event_type, "website_bug_report");
+    assert.equal(dispatchedPayload.client_payload.id, result.id);
+    assert.match(dispatchedPayload.client_payload.callback_token, /^[0-9a-f]{64}$/i);
+
+    const callbackBody = JSON.stringify({
+      status: "patch-ready",
+      statusMessage: "修复提案已经通过测试。",
+      fixUrl: "https://github.com/bb54188/super-guan-hao/pull/123",
+    });
+    const callbackResponse = await worker.fetch(
+      new Request(`http://localhost/api/bugs/${result.id}/status`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${dispatchedPayload.client_payload.callback_token}`,
+          "content-length": String(new TextEncoder().encode(callbackBody).byteLength),
+          "content-type": "application/json",
+        },
+        body: callbackBody,
+      }),
+      env,
+      context,
+    );
+    assert.equal(callbackResponse.status, 200);
+
+    const statusResponse = await worker.fetch(
+      new Request(`http://localhost/api/bugs/${result.id}/status`, {
+        headers: { Authorization: `Bearer ${result.trackingToken}` },
+      }),
+      env,
+      context,
+    );
+    const statusResult = await statusResponse.json();
+    assert.equal(statusResult.report.status, "patch-ready");
+    assert.equal(statusResult.report.fixUrl, "https://github.com/bb54188/super-guan-hao/pull/123");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("renders Zhao Junjie photo series controls", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `zhao-series-${process.pid}-${Date.now()}`);

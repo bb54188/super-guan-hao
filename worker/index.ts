@@ -16,6 +16,11 @@ const MAX_METADATA_BYTES = 2 * 1024 * 1024;
 const MAX_CLASSIFICATION_PREVIEW_LENGTH = 1_500_000;
 const MAX_CLASSIFICATION_FALLBACK_BYTES = 5 * 1024 * 1024;
 const IMAGE_CLASSIFICATION_MODEL = "@cf/google/gemma-4-26b-a4b-it" as const;
+const BUG_REPORT_ROOT = "community/bugs";
+const MAX_BUG_REPORT_BYTES = 48 * 1024;
+const BUG_REPORT_COOLDOWN_MS = 60_000;
+const GITHUB_AUTOFIX_ENDPOINT =
+  "https://api.github.com/repos/bb54188/super-guan-hao/dispatches";
 
 const IMAGE_SERIES = {
   "wet-hair": {
@@ -99,6 +104,33 @@ type UploadSession = {
   mediaName: string;
   mediaSize?: number;
   createdAt: string;
+};
+
+type BugStatus =
+  | "waiting-setup"
+  | "queued"
+  | "analyzing"
+  | "testing"
+  | "patch-ready"
+  | "needs-review"
+  | "failed";
+
+type BugReportRecord = {
+  id: string;
+  title: string;
+  pagePath: string;
+  steps: string;
+  expected: string;
+  actual: string;
+  environment: string;
+  contact?: string;
+  createdAt: string;
+  updatedAt: string;
+  status: BugStatus;
+  statusMessage: string;
+  statusTokenHash: string;
+  callbackTokenHash: string;
+  fixUrl?: string;
 };
 
 interface WorkerEnv extends Env {
@@ -243,8 +275,53 @@ function uploadKey(id: string): string {
   return `${SUBMISSION_ROOT}/uploads/${id}.json`;
 }
 
+function bugReportKey(id: string): string {
+  return `${BUG_REPORT_ROOT}/reports/${id}.json`;
+}
+
+function bugRateKey(fingerprint: string): string {
+  return `${BUG_REPORT_ROOT}/rate/${fingerprint}.json`;
+}
+
 function validId(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function isBugStatus(value: unknown): value is BugStatus {
+  return (
+    value === "waiting-setup" ||
+    value === "queued" ||
+    value === "analyzing" ||
+    value === "testing" ||
+    value === "patch-ready" ||
+    value === "needs-review" ||
+    value === "failed"
+  );
+}
+
+function isBugReportRecord(value: unknown): value is BugReportRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Record<string, unknown>;
+  return (
+    typeof report.id === "string" &&
+    validId(report.id) &&
+    typeof report.title === "string" &&
+    typeof report.pagePath === "string" &&
+    typeof report.steps === "string" &&
+    typeof report.expected === "string" &&
+    typeof report.actual === "string" &&
+    typeof report.environment === "string" &&
+    typeof report.createdAt === "string" &&
+    typeof report.updatedAt === "string" &&
+    isBugStatus(report.status) &&
+    typeof report.statusMessage === "string" &&
+    typeof report.statusTokenHash === "string" &&
+    /^[0-9a-f]{64}$/i.test(report.statusTokenHash) &&
+    typeof report.callbackTokenHash === "string" &&
+    /^[0-9a-f]{64}$/i.test(report.callbackTokenHash) &&
+    (report.contact === undefined || typeof report.contact === "string") &&
+    (report.fixUrl === undefined || typeof report.fixUrl === "string")
+  );
 }
 
 function parseSourceUrl(value: string): string | undefined {
@@ -423,17 +500,20 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
+function hexDigestBytes(value: string): Uint8Array {
+  if (!/^[0-9a-f]{64}$/i.test(value)) return new Uint8Array(32);
+  return Uint8Array.from(value.match(/.{2}/g) ?? [], (part) => Number.parseInt(part, 16));
+}
+
 function constantTimeHexEqual(actual: string, expected: string): boolean {
-  const actualBytes = Uint8Array.from(actual.match(/.{2}/g) ?? [], (value) =>
-    Number.parseInt(value, 16),
-  );
-  const expectedBytes = Uint8Array.from(expected.match(/.{2}/g) ?? [], (value) =>
-    Number.parseInt(value, 16),
-  );
-  let difference = actualBytes.length ^ expectedBytes.length;
-  const length = Math.max(actualBytes.length, expectedBytes.length);
-  for (let index = 0; index < length; index += 1) {
-    difference |= (actualBytes[index] ?? 0) ^ (expectedBytes[index] ?? 0);
+  const actualBytes = hexDigestBytes(actual);
+  const expectedBytes = hexDigestBytes(expected);
+  if (typeof crypto.subtle.timingSafeEqual === "function") {
+    return crypto.subtle.timingSafeEqual(actualBytes, expectedBytes);
+  }
+  let difference = 0;
+  for (let index = 0; index < actualBytes.length; index += 1) {
+    difference |= actualBytes[index] ^ expectedBytes[index];
   }
   return difference === 0;
 }
@@ -468,6 +548,323 @@ async function readUpload(env: WorkerEnv, id: string): Promise<UploadSession | n
   } catch {
     return null;
   }
+}
+
+async function readBugReport(env: WorkerEnv, id: string): Promise<BugReportRecord | null> {
+  const object = await env.MEDIA.get(bugReportKey(id));
+  if (!object) return null;
+  try {
+    const value: unknown = await object.json();
+    return isBugReportRecord(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeBugReport(env: WorkerEnv, report: BugReportRecord): Promise<void> {
+  await env.MEDIA.put(bugReportKey(report.id), JSON.stringify(report), {
+    httpMetadata: { contentType: "application/json; charset=utf-8" },
+  });
+}
+
+function bearerToken(request: Request): string {
+  const authorization = request.headers.get("authorization") ?? "";
+  return authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+}
+
+function githubAutofixToken(env: WorkerEnv): string {
+  if (!("GITHUB_AUTOFIX_TOKEN" in env)) return "";
+  const value = env.GITHUB_AUTOFIX_TOKEN;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function parseBugPagePath(value: unknown, requestUrl: URL): string | null {
+  const page = cleanText(value, 300) || "/";
+  if (page.startsWith("/") && !page.startsWith("//")) return page;
+  try {
+    const parsed = new URL(page);
+    if (parsed.origin !== requestUrl.origin && parsed.hostname !== "guanhao.johncat.top") {
+      return null;
+    }
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return null;
+  }
+}
+
+async function bugRateFingerprint(request: Request): Promise<string | null> {
+  const address = cleanText(request.headers.get("cf-connecting-ip"), 80);
+  if (!address) return null;
+  return (await sha256Hex(`super-guan-hao-bug-report-v1:${address}`)).slice(0, 40);
+}
+
+async function isBugRateLimited(env: WorkerEnv, fingerprint: string | null): Promise<boolean> {
+  if (!fingerprint) return false;
+  const object = await env.MEDIA.get(bugRateKey(fingerprint));
+  if (!object) return false;
+  try {
+    const value: unknown = await object.json();
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const submittedAt = (value as Record<string, unknown>).submittedAt;
+    if (typeof submittedAt !== "string") return false;
+    const timestamp = Date.parse(submittedAt);
+    return Number.isFinite(timestamp) && Date.now() - timestamp < BUG_REPORT_COOLDOWN_MS;
+  } catch {
+    return false;
+  }
+}
+
+async function dispatchBugAutofix(
+  env: WorkerEnv,
+  report: BugReportRecord,
+  callbackToken: string,
+  githubToken: string,
+): Promise<void> {
+  try {
+    const response = await fetch(GITHUB_AUTOFIX_ENDPOINT, {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${githubToken}`,
+        "Content-Type": "application/json",
+        "User-Agent": "super-guan-hao-bug-autofix",
+        "X-GitHub-Api-Version": "2026-03-10",
+      },
+      body: JSON.stringify({
+        event_type: "website_bug_report",
+        client_payload: {
+          id: report.id,
+          title: report.title,
+          page: report.pagePath,
+          steps: report.steps,
+          expected: report.expected,
+          actual: report.actual,
+          environment: report.environment,
+          callback_token: callbackToken,
+        },
+      }),
+    });
+    if (response.status !== 204) {
+      throw new Error(`GitHub dispatch returned ${response.status}`);
+    }
+    await writeBugReport(env, {
+      ...report,
+      updatedAt: new Date().toISOString(),
+      status: "queued",
+      statusMessage: "报告已进入 ChatGPT 修复队列，正在等待自动分析。",
+    });
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        message: "bug autofix dispatch failed",
+        bugId: report.id,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    await writeBugReport(env, {
+      ...report,
+      updatedAt: new Date().toISOString(),
+      status: "failed",
+      statusMessage: "自动修复通道暂时连接失败，报告已经保存，管理员可稍后重试。",
+    });
+  }
+}
+
+async function createBugReport(
+  request: Request,
+  env: WorkerEnv,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.startsWith("application/json")) {
+    return json({ error: "请使用网站的 Bug 反馈表单。" }, 415);
+  }
+  const contentLength = Number(request.headers.get("content-length"));
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    return json({ error: "无法确认反馈内容大小，请刷新页面后重试。" }, 411);
+  }
+  if (contentLength > MAX_BUG_REPORT_BYTES) {
+    return json({ error: "反馈内容过长，请精简后重试。" }, 413);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    const value: unknown = await request.json();
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return json({ error: "反馈数据格式无效。" }, 400);
+    }
+    body = value as Record<string, unknown>;
+  } catch {
+    return json({ error: "反馈数据格式无效。" }, 400);
+  }
+
+  if (cleanText(body.website, 100)) {
+    return json({ ok: true, message: "反馈已收到。" }, 202);
+  }
+
+  const title = cleanText(body.title, 80);
+  const pagePath = parseBugPagePath(body.pagePath, new URL(request.url));
+  const steps = cleanText(body.steps, 3000);
+  const expected = cleanText(body.expected, 2000);
+  const actual = cleanText(body.actual, 2000);
+  const environment = cleanText(body.environment, 500) || "未提供设备与浏览器信息";
+  const contact = cleanText(body.contact, 120);
+  const agreement = body.agreement === true;
+
+  if (title.length < 2 || !steps || !actual) {
+    return json({ error: "请填写 Bug 标题、复现步骤和实际结果。" }, 400);
+  }
+  if (!pagePath) {
+    return json({ error: "问题页面必须属于 guanhao.johncat.top。" }, 400);
+  }
+  if (!agreement) {
+    return json({ error: "请确认反馈中不包含账号、口令或其他敏感信息。" }, 400);
+  }
+
+  const fingerprint = await bugRateFingerprint(request);
+  if (await isBugRateLimited(env, fingerprint)) {
+    return json({ error: "提交得太快了，请一分钟后再试。" }, 429);
+  }
+
+  const id = crypto.randomUUID();
+  const statusToken = randomToken();
+  const callbackToken = randomToken();
+  const now = new Date().toISOString();
+  const githubToken = githubAutofixToken(env);
+  const report: BugReportRecord = {
+    id,
+    title,
+    pagePath,
+    steps,
+    expected,
+    actual,
+    environment,
+    ...(contact ? { contact } : {}),
+    createdAt: now,
+    updatedAt: now,
+    status: githubToken ? "queued" : "waiting-setup",
+    statusMessage: githubToken
+      ? "报告已保存，正在交给 ChatGPT 自动分析。"
+      : "报告已保存；自动修复凭证尚未配置，等待管理员启用。",
+    statusTokenHash: await sha256Hex(statusToken),
+    callbackTokenHash: await sha256Hex(callbackToken),
+  };
+
+  const writes: Promise<unknown>[] = [writeBugReport(env, report)];
+  if (fingerprint) {
+    writes.push(
+      env.MEDIA.put(
+        bugRateKey(fingerprint),
+        JSON.stringify({ submittedAt: now }),
+        { httpMetadata: { contentType: "application/json; charset=utf-8" } },
+      ),
+    );
+  }
+  await Promise.all(writes);
+
+  if (githubToken) {
+    ctx.waitUntil(dispatchBugAutofix(env, report, callbackToken, githubToken));
+  }
+
+  return json(
+    {
+      ok: true,
+      id,
+      trackingToken: statusToken,
+      status: report.status,
+      statusMessage: report.statusMessage,
+      message: "Bug 已提交。你可以留在本页查看自动修复进度。",
+    },
+    202,
+  );
+}
+
+function publicBugStatus(report: BugReportRecord): Record<string, unknown> {
+  return {
+    id: report.id,
+    title: report.title,
+    status: report.status,
+    statusMessage: report.statusMessage,
+    createdAt: report.createdAt,
+    updatedAt: report.updatedAt,
+    fixUrl: report.fixUrl,
+  };
+}
+
+function parseFixUrl(value: unknown): string | undefined {
+  const candidate = cleanText(value, 500);
+  if (!candidate) return undefined;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "https:" &&
+      url.hostname === "github.com" &&
+      url.pathname.startsWith("/bb54188/super-guan-hao/pull/")
+      ? url.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function handleBugStatus(
+  request: Request,
+  env: WorkerEnv,
+  id: string,
+): Promise<Response> {
+  if (!validId(id)) return json({ error: "无效的 Bug 编号。" }, 400);
+  const report = await readBugReport(env, id);
+  if (!report) return json({ error: "没有找到这条 Bug 反馈。" }, 404);
+  const token = bearerToken(request);
+
+  if (request.method === "GET") {
+    if (!(await verifyToken(token, report.statusTokenHash))) {
+      return json({ error: "进度查看凭证无效。" }, 401);
+    }
+    return json({ report: publicBugStatus(report) });
+  }
+
+  if (request.method === "PATCH") {
+    if (!(await verifyToken(token, report.callbackTokenHash))) {
+      return json({ error: "自动修复回调凭证无效。" }, 401);
+    }
+    const contentLength = Number(request.headers.get("content-length"));
+    if (!Number.isFinite(contentLength) || contentLength <= 0 || contentLength > 8192) {
+      return json({ error: "修复状态数据大小无效。" }, 413);
+    }
+    let body: Record<string, unknown>;
+    try {
+      const value: unknown = await request.json();
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return json({ error: "修复状态数据格式无效。" }, 400);
+      }
+      body = value as Record<string, unknown>;
+    } catch {
+      return json({ error: "修复状态数据格式无效。" }, 400);
+    }
+    const status = body.status;
+    if (
+      status !== "analyzing" &&
+      status !== "testing" &&
+      status !== "patch-ready" &&
+      status !== "needs-review" &&
+      status !== "failed"
+    ) {
+      return json({ error: "修复状态无效。" }, 400);
+    }
+    const statusMessage = cleanText(body.statusMessage, 300);
+    const fixUrl = parseFixUrl(body.fixUrl);
+    const updated: BugReportRecord = {
+      ...report,
+      status,
+      statusMessage: statusMessage || report.statusMessage,
+      updatedAt: new Date().toISOString(),
+      ...(fixUrl ? { fixUrl } : {}),
+    };
+    await writeBugReport(env, updated);
+    return json({ ok: true });
+  }
+
+  return json({ error: "Method not allowed" }, 405);
 }
 
 async function listSubmissions(
@@ -1018,6 +1415,13 @@ const worker = {
 
       if (url.pathname.startsWith("/api/admin/submissions")) {
         return await handleAdminApi(request, env, url);
+      }
+      if (url.pathname === "/api/bugs" && request.method === "POST") {
+        return await createBugReport(request, env, ctx);
+      }
+      const bugStatusMatch = url.pathname.match(/^\/api\/bugs\/([^/]+)\/status$/);
+      if (bugStatusMatch) {
+        return await handleBugStatus(request, env, bugStatusMatch[1]);
       }
       if (url.pathname === "/api/submission-uploads" && request.method === "PUT") {
         return await createUpload(request, env);

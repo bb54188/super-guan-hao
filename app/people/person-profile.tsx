@@ -297,6 +297,7 @@ export function PersonProfile({ profile }: { profile: PersonProfileData }) {
 
       <footer className="person-footer">
         <a href="/">超级大关昊</a>
+        <a href="/bugs">反馈网站 Bug</a>
         <p>非官方校园影像档案 · 仅供同学间欣赏</p>
         <p>© 2026 CHARACTER ARCHIVE</p>
         <p className="photo-credit">部分照片由千秋雯提供</p>

@@ -214,6 +214,7 @@ export default function Home() {
           <a href="#gallery">图片</a>
           <a href="#video">视频</a>
           <a href="/submissions">投稿区</a>
+          <a href="/bugs">Bug反馈</a>
         </div>
         <a className="nav-cta" href="/submit">
           我要投稿 <span aria-hidden="true">↗</span>
@@ -226,6 +227,7 @@ export default function Home() {
         <a href="#gallery">图片</a>
         <a href="#video">视频</a>
         <a href="/submissions">投稿区</a>
+        <a href="/bugs">反馈</a>
         <a className="quick-nav-submit" href="/submit">投稿＋</a>
       </nav>
 
@@ -706,6 +708,7 @@ export default function Home() {
         <p>非官方校园影像档案 · 仅供同学间欣赏</p>
         <p>© 2026 GUAN HAO ARCHIVE</p>
         <p className="photo-credit">部分照片由千秋雯提供</p>
+        <a className="footer-bug-link" href="/bugs">反馈网站 Bug ↗</a>
       </footer>
 
       {activePhoto && lightboxIndex !== null && (

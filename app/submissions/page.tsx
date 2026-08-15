@@ -233,6 +233,7 @@ export default function SubmissionsPage() {
 
       <footer className="community-footer">
         <a href="/submit">我要投稿 ↗</a>
+        <a href="/bugs">反馈网站 Bug</a>
         <p>部分照片由千秋雯提供</p>
       </footer>
     </main>

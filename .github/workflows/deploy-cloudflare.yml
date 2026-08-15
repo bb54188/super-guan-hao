@@ -100,8 +100,13 @@ jobs:
             https://guanhao.johncat.top/submit)"
           grep -Fq "投稿" <<<"${submit_page}"
 
+          bug_page="$(curl --fail --silent --show-error --max-time 30 \
+            https://guanhao.johncat.top/bugs)"
+          grep -Fq "交给 ChatGPT" <<<"${bug_page}"
+          grep -Fq "提交 Bug 并自动分析" <<<"${bug_page}"
+
           submissions_json="$(curl --fail --silent --show-error --max-time 30 \
             https://guanhao.johncat.top/api/submissions)"
           grep -Fq '"submissions"' <<<"${submissions_json}"
 
-          echo "Production domain, media, submission pages, R2 API, and WeChat verification file verified."
+          echo "Production domain, media, submissions, Bug feedback page, R2 API, and WeChat verification file verified."
