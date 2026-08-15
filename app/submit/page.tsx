@@ -5,9 +5,17 @@ import { FormEvent, useState } from "react";
 
 type SubmitState =
   | { kind: "idle"; message: string }
+  | { kind: "uploading"; message: string }
   | { kind: "sending"; message: string }
   | { kind: "success"; message: string }
   | { kind: "error"; message: string };
+
+type UploadResult = {
+  uploadId: string;
+  uploadToken: string;
+};
+
+const MAX_UPLOAD_BYTES = 80 * 1024 * 1024;
 
 const categoryNotes = {
   photo: "校园照片、聊天截图或人物影像",
@@ -22,12 +30,56 @@ export default function SubmitPage() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
-    setState({ kind: "sending", message: "正在提交，请不要关闭页面……" });
+    const formData = new FormData(form);
+    const mediaEntry = formData.get("media");
+    const media = mediaEntry instanceof File && mediaEntry.size > 0 ? mediaEntry : null;
+    let uploaded: UploadResult | null = null;
 
     try {
+      if (media && media.size > MAX_UPLOAD_BYTES) {
+        throw new Error("上传文件不能超过 80 MB；更大的视频请填写素材链接。");
+      }
+
+      if (media) {
+        setState({ kind: "uploading", message: "正在上传素材，请不要关闭页面……" });
+        const uploadResponse = await fetch("/api/submission-uploads", {
+          method: "PUT",
+          headers: {
+            "Content-Type": media.type || "application/octet-stream",
+            "X-Submission-Category": String(formData.get("category") ?? ""),
+            "X-File-Name": encodeURIComponent(media.name),
+          },
+          body: media,
+        });
+        const uploadResult = (await uploadResponse.json()) as {
+          uploadId?: string;
+          uploadToken?: string;
+          error?: string;
+        };
+        if (!uploadResponse.ok || !uploadResult.uploadId || !uploadResult.uploadToken) {
+          throw new Error(uploadResult.error ?? "素材上传失败");
+        }
+        uploaded = {
+          uploadId: uploadResult.uploadId,
+          uploadToken: uploadResult.uploadToken,
+        };
+      }
+
+      setState({ kind: "sending", message: "素材已就绪，正在提交投稿信息……" });
       const response = await fetch("/api/submissions", {
         method: "POST",
-        body: new FormData(form),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          category: formData.get("category"),
+          title: formData.get("title"),
+          description: formData.get("description"),
+          submitter: formData.get("submitter"),
+          contact: formData.get("contact"),
+          sourceUrl: formData.get("sourceUrl"),
+          website: formData.get("website"),
+          agreement: formData.get("agreement") === "yes",
+          ...(uploaded ?? {}),
+        }),
       });
       const result = (await response.json()) as { message?: string; error?: string };
       if (!response.ok) throw new Error(result.error ?? "投稿提交失败");
@@ -38,6 +90,12 @@ export default function SubmitPage() {
         message: result.message ?? "投稿已提交，等待审核。",
       });
     } catch (error) {
+      if (uploaded) {
+        await fetch(`/api/submission-uploads/${uploaded.uploadId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${uploaded.uploadToken}` },
+        }).catch(() => undefined);
+      }
       setState({
         kind: "error",
         message: error instanceof Error ? error.message : "投稿提交失败，请稍后再试。",
@@ -75,7 +133,7 @@ export default function SubmitPage() {
           <h2>先分类，<br />再归档。</h2>
           <ul>
             <li>投稿人会公开显示，联系方式不会公开。</li>
-            <li>单个上传文件不超过 20 MB；大视频可填写素材链接。</li>
+            <li>单个上传文件不超过 80 MB；更大的视频可填写素材链接。</li>
             <li>不得上传隐私、违法内容或未经允许的他人影像。</li>
             <li>管理员可根据内容调整标题、说明或拒绝投稿。</li>
           </ul>
@@ -129,7 +187,7 @@ export default function SubmitPage() {
           <label className="field file-field">
             <span>上传素材</span>
             <input name="media" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" />
-            <small>支持 JPG、PNG、WebP、GIF、MP4、WebM，最大 20 MB。</small>
+            <small>支持 JPG、PNG、WebP、GIF、MP4、WebM，最大 80 MB。</small>
           </label>
 
           <label className="field">
@@ -146,8 +204,17 @@ export default function SubmitPage() {
             网站<input name="website" tabIndex={-1} autoComplete="off" />
           </label>
 
-          <button className="submission-submit" type="submit" disabled={state.kind === "sending"}>
-            {state.kind === "sending" ? "正在提交" : "提交审核"}<span aria-hidden="true">↗</span>
+          <button
+            className="submission-submit"
+            type="submit"
+            disabled={state.kind === "uploading" || state.kind === "sending"}
+          >
+            {state.kind === "uploading"
+              ? "正在上传"
+              : state.kind === "sending"
+                ? "正在提交"
+                : "提交审核"}
+            <span aria-hidden="true">↗</span>
           </button>
 
           {state.kind !== "idle" && (

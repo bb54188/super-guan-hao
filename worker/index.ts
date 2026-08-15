@@ -10,8 +10,8 @@ const WECHAT_VERIFICATION_PATH = "/fca6cb2f88fa0690d15f0cde3ad718b0.txt";
 const WECHAT_VERIFICATION_VALUE = "21d8b5393838f286c4a5bc799c24ce6302a4301b";
 const REVIEW_TOKEN_HASH = "dc565be1f707b601ac2ef93fea8ac39eb06357034cb86b84d65eb3c5cbc5b7ec";
 const SUBMISSION_ROOT = "community/submissions";
-const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
-const MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 1024 * 1024;
+const MAX_UPLOAD_BYTES = 80 * 1024 * 1024;
+const MAX_METADATA_BYTES = 32 * 1024;
 
 type SubmissionCategory = "photo" | "video" | "story";
 type SubmissionStatus = "pending" | "approved";
@@ -30,6 +30,16 @@ type SubmissionRecord = {
   mediaKey?: string;
   mediaType?: string;
   mediaName?: string;
+};
+
+type UploadSession = {
+  id: string;
+  category: SubmissionCategory;
+  tokenHash: string;
+  mediaKey: string;
+  mediaType: string;
+  mediaName: string;
+  createdAt: string;
 };
 
 interface WorkerEnv {
@@ -62,7 +72,7 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function cleanText(value: FormDataEntryValue | null, maxLength: number): string {
+function cleanText(value: unknown, maxLength: number): string {
   if (typeof value !== "string") return "";
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
@@ -86,12 +96,32 @@ function isSubmissionRecord(value: unknown): value is SubmissionRecord {
   );
 }
 
+function isUploadSession(value: unknown): value is UploadSession {
+  if (!value || typeof value !== "object") return false;
+  const upload = value as Record<string, unknown>;
+  return (
+    typeof upload.id === "string" &&
+    typeof upload.category === "string" &&
+    isCategory(upload.category) &&
+    typeof upload.tokenHash === "string" &&
+    /^[0-9a-f]{64}$/i.test(upload.tokenHash) &&
+    typeof upload.mediaKey === "string" &&
+    typeof upload.mediaType === "string" &&
+    typeof upload.mediaName === "string" &&
+    typeof upload.createdAt === "string"
+  );
+}
+
 function pendingKey(id: string): string {
   return `${SUBMISSION_ROOT}/pending/${id}.json`;
 }
 
 function approvedKey(id: string): string {
   return `${SUBMISSION_ROOT}/approved/${id}.json`;
+}
+
+function uploadKey(id: string): string {
+  return `${SUBMISSION_ROOT}/uploads/${id}.json`;
 }
 
 function validId(value: string): boolean {
@@ -122,12 +152,55 @@ function extensionFor(type: string): string | null {
   return extensions[type] ?? null;
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(bytes)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function constantTimeHexEqual(actual: string, expected: string): boolean {
+  const actualBytes = Uint8Array.from(actual.match(/.{2}/g) ?? [], (value) =>
+    Number.parseInt(value, 16),
+  );
+  const expectedBytes = Uint8Array.from(expected.match(/.{2}/g) ?? [], (value) =>
+    Number.parseInt(value, 16),
+  );
+  let difference = actualBytes.length ^ expectedBytes.length;
+  const length = Math.max(actualBytes.length, expectedBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    difference |= (actualBytes[index] ?? 0) ^ (expectedBytes[index] ?? 0);
+  }
+  return difference === 0;
+}
+
+function randomToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function verifyToken(token: string, expectedHash: string): Promise<boolean> {
+  return constantTimeHexEqual(await sha256Hex(token), expectedHash);
+}
+
 async function readSubmission(env: WorkerEnv, key: string): Promise<SubmissionRecord | null> {
   const object = await env.MEDIA.get(key);
   if (!object) return null;
   try {
     const value: unknown = await object.json();
     return isSubmissionRecord(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readUpload(env: WorkerEnv, id: string): Promise<UploadSession | null> {
+  const object = await env.MEDIA.get(uploadKey(id));
+  if (!object) return null;
+  try {
+    const value: unknown = await object.json();
+    return isUploadSession(value) ? value : null;
   } catch {
     return null;
   }
@@ -154,51 +227,137 @@ async function verifyReviewToken(request: Request): Promise<boolean> {
   const token = authorization.startsWith("Bearer ")
     ? authorization.slice(7).trim()
     : "";
-  const encoder = new TextEncoder();
-  const providedHash = await crypto.subtle.digest("SHA-256", encoder.encode(token));
-  const expectedHash = Uint8Array.from(
-    REVIEW_TOKEN_HASH.match(/.{2}/g) ?? [],
-    (byte) => Number.parseInt(byte, 16),
-  );
-  const actual = new Uint8Array(providedHash);
-  let difference = actual.length ^ expectedHash.length;
-  for (let index = 0; index < Math.max(actual.length, expectedHash.length); index += 1) {
-    difference |= (actual[index] ?? 0) ^ (expectedHash[index] ?? 0);
+  return verifyToken(token, REVIEW_TOKEN_HASH);
+}
+
+async function createUpload(request: Request, env: WorkerEnv): Promise<Response> {
+  if (!request.body) return json({ error: "请选择要上传的文件。" }, 400);
+
+  const contentLength = Number(request.headers.get("content-length"));
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    return json({ error: "无法确认文件大小，请重新选择文件后上传。" }, 411);
   }
-  return difference === 0;
+  if (contentLength > MAX_UPLOAD_BYTES) {
+    return json({ error: "上传文件不能超过 80 MB；更大的视频请填写素材链接。" }, 413);
+  }
+
+  const categoryValue = cleanText(request.headers.get("x-submission-category"), 20);
+  if (!isCategory(categoryValue)) {
+    return json({ error: "请选择图片、视频或事迹分类。" }, 400);
+  }
+
+  const mediaType = (request.headers.get("content-type") ?? "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  const extension = extensionFor(mediaType);
+  if (!extension) {
+    return json({ error: "仅支持 JPG、PNG、WebP、GIF、MP4 和 WebM 文件。" }, 415);
+  }
+  if (categoryValue === "photo" && !mediaType.startsWith("image/")) {
+    return json({ error: "图片分类只能上传图片文件。" }, 400);
+  }
+  if (categoryValue === "video" && !mediaType.startsWith("video/")) {
+    return json({ error: "视频分类只能上传视频文件。" }, 400);
+  }
+
+  const encodedName = request.headers.get("x-file-name") ?? "";
+  let decodedName = encodedName;
+  try {
+    decodedName = decodeURIComponent(encodedName);
+  } catch {
+    return json({ error: "文件名格式无效，请重新选择文件。" }, 400);
+  }
+  const mediaName = cleanText(decodedName, 120) || `upload.${extension}`;
+  const id = crypto.randomUUID();
+  const token = randomToken();
+  const mediaKey = `${SUBMISSION_ROOT}/media/${id}.${extension}`;
+  const upload: UploadSession = {
+    id,
+    category: categoryValue,
+    tokenHash: await sha256Hex(token),
+    mediaKey,
+    mediaType,
+    mediaName,
+    createdAt: new Date().toISOString(),
+  };
+
+  await env.MEDIA.put(mediaKey, request.body, {
+    httpMetadata: { contentType: mediaType },
+    customMetadata: { submissionId: id },
+  });
+  try {
+    await env.MEDIA.put(uploadKey(id), JSON.stringify(upload), {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+    });
+  } catch (error) {
+    await env.MEDIA.delete(mediaKey);
+    throw error;
+  }
+
+  return json(
+    {
+      ok: true,
+      uploadId: id,
+      uploadToken: token,
+      message: "文件上传完成，正在提交投稿信息。",
+    },
+    201,
+  );
+}
+
+async function deleteUpload(request: Request, env: WorkerEnv, id: string): Promise<Response> {
+  if (!validId(id)) return json({ error: "无效的上传编号。" }, 400);
+  const upload = await readUpload(env, id);
+  if (!upload) return json({ ok: true });
+  const authorization = request.headers.get("authorization") ?? "";
+  const token = authorization.startsWith("Bearer ")
+    ? authorization.slice(7).trim()
+    : "";
+  if (!(await verifyToken(token, upload.tokenHash))) {
+    return json({ error: "上传凭证无效。" }, 401);
+  }
+  await env.MEDIA.delete([uploadKey(id), upload.mediaKey]);
+  return json({ ok: true });
 }
 
 async function createSubmission(request: Request, env: WorkerEnv): Promise<Response> {
   const contentType = request.headers.get("content-type") ?? "";
-  if (!contentType.startsWith("multipart/form-data")) {
+  if (!contentType.startsWith("application/json")) {
     return json({ error: "请使用网站投稿表单。" }, 415);
   }
 
-  const contentLength = Number(request.headers.get("content-length"));
-  if (!Number.isFinite(contentLength) || contentLength <= 0) {
-    return json({ error: "无法确认投稿大小，请重新选择文件后提交。" }, 411);
-  }
-  if (contentLength > MAX_REQUEST_BYTES) {
-    return json({ error: "单次投稿不能超过 20 MB。" }, 413);
+  const contentLengthValue = request.headers.get("content-length");
+  const contentLength = contentLengthValue ? Number(contentLengthValue) : 0;
+  if (contentLengthValue && (!Number.isFinite(contentLength) || contentLength > MAX_METADATA_BYTES)) {
+    return json({ error: "投稿文字内容过长。" }, 413);
   }
 
-  const form = await request.formData();
-  if (cleanText(form.get("website"), 100)) {
+  let body: Record<string, unknown>;
+  try {
+    const value: unknown = await request.json();
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return json({ error: "投稿数据格式无效。" }, 400);
+    }
+    body = value as Record<string, unknown>;
+  } catch {
+    return json({ error: "投稿数据格式无效。" }, 400);
+  }
+
+  if (cleanText(body.website, 100)) {
     return json({ ok: true, message: "投稿已提交，等待审核。" }, 201);
   }
 
-  const categoryValue = cleanText(form.get("category"), 20);
-  const title = cleanText(form.get("title"), 60);
-  const description = cleanText(form.get("description"), 2000);
-  const submitter = cleanText(form.get("submitter"), 30);
-  const contact = cleanText(form.get("contact"), 100);
-  const sourceUrlInput = cleanText(form.get("sourceUrl"), 500);
+  const categoryValue = cleanText(body.category, 20);
+  const title = cleanText(body.title, 60);
+  const description = cleanText(body.description, 2000);
+  const submitter = cleanText(body.submitter, 30);
+  const contact = cleanText(body.contact, 100);
+  const sourceUrlInput = cleanText(body.sourceUrl, 500);
   const sourceUrl = parseSourceUrl(sourceUrlInput);
-  const agreement = form.get("agreement") === "yes";
-  const mediaEntry = form.get("media");
-  const media = mediaEntry && typeof mediaEntry !== "string" && mediaEntry.size > 0
-    ? mediaEntry
-    : null;
+  const agreement = body.agreement === true;
+  const uploadId = cleanText(body.uploadId, 80);
+  const uploadToken = cleanText(body.uploadToken, 128);
 
   if (!isCategory(categoryValue)) {
     return json({ error: "请选择图片、视频或事迹分类。" }, 400);
@@ -212,38 +371,26 @@ async function createSubmission(request: Request, env: WorkerEnv): Promise<Respo
   if (sourceUrlInput && !sourceUrl) {
     return json({ error: "素材链接必须是有效的 HTTP 或 HTTPS 地址。" }, 400);
   }
-  if ((categoryValue === "photo" || categoryValue === "video") && !media && !sourceUrl) {
+  if ((uploadId && !uploadToken) || (!uploadId && uploadToken)) {
+    return json({ error: "上传凭证不完整，请重新选择文件。" }, 400);
+  }
+
+  let upload: UploadSession | null = null;
+  if (uploadId) {
+    if (!validId(uploadId)) return json({ error: "无效的上传编号。" }, 400);
+    upload = await readUpload(env, uploadId);
+    if (!upload || !(await verifyToken(uploadToken, upload.tokenHash))) {
+      return json({ error: "上传文件不存在或凭证已失效，请重新上传。" }, 400);
+    }
+    if (upload.category !== categoryValue) {
+      return json({ error: "投稿分类与已上传文件不一致，请重新上传。" }, 400);
+    }
+  }
+  if ((categoryValue === "photo" || categoryValue === "video") && !upload && !sourceUrl) {
     return json({ error: "图片或视频投稿需要上传文件或填写素材链接。" }, 400);
   }
 
-  let mediaKey: string | undefined;
-  let mediaType: string | undefined;
-  let mediaName: string | undefined;
-  const id = crypto.randomUUID();
-
-  if (media) {
-    const extension = extensionFor(media.type);
-    if (!extension) {
-      return json({ error: "仅支持 JPG、PNG、WebP、GIF、MP4 和 WebM 文件。" }, 415);
-    }
-    if (media.size > MAX_UPLOAD_BYTES) {
-      return json({ error: "上传文件不能超过 20 MB；更大的视频请填写素材链接。" }, 413);
-    }
-    if (categoryValue === "photo" && !media.type.startsWith("image/")) {
-      return json({ error: "图片分类只能上传图片文件。" }, 400);
-    }
-    if (categoryValue === "video" && !media.type.startsWith("video/")) {
-      return json({ error: "视频分类只能上传视频文件。" }, 400);
-    }
-
-    mediaKey = `${SUBMISSION_ROOT}/media/${id}.${extension}`;
-    mediaType = media.type;
-    mediaName = media.name.slice(0, 120);
-    await env.MEDIA.put(mediaKey, media.stream(), {
-      httpMetadata: { contentType: media.type },
-      customMetadata: { submissionId: id },
-    });
-  }
+  const id = upload?.id ?? crypto.randomUUID();
 
   const submission: SubmissionRecord = {
     id,
@@ -255,16 +402,20 @@ async function createSubmission(request: Request, env: WorkerEnv): Promise<Respo
     ...(sourceUrl ? { sourceUrl } : {}),
     createdAt: new Date().toISOString(),
     status: "pending",
-    ...(mediaKey ? { mediaKey, mediaType, mediaName } : {}),
+    ...(upload
+      ? {
+          mediaKey: upload.mediaKey,
+          mediaType: upload.mediaType,
+          mediaName: upload.mediaName,
+        }
+      : {}),
   };
 
-  try {
-    await env.MEDIA.put(pendingKey(id), JSON.stringify(submission), {
-      httpMetadata: { contentType: "application/json; charset=utf-8" },
-    });
-  } catch (error) {
-    if (mediaKey) await env.MEDIA.delete(mediaKey);
-    throw error;
+  await env.MEDIA.put(pendingKey(id), JSON.stringify(submission), {
+    httpMetadata: { contentType: "application/json; charset=utf-8" },
+  });
+  if (upload) {
+    await env.MEDIA.delete(uploadKey(id));
   }
 
   return json(
@@ -421,6 +572,13 @@ const worker = {
 
       if (url.pathname.startsWith("/api/admin/submissions")) {
         return await handleAdminApi(request, env, url);
+      }
+      if (url.pathname === "/api/submission-uploads" && request.method === "PUT") {
+        return await createUpload(request, env);
+      }
+      const uploadMatch = url.pathname.match(/^\/api\/submission-uploads\/([^/]+)$/);
+      if (uploadMatch && request.method === "DELETE") {
+        return await deleteUpload(request, env, uploadMatch[1]);
       }
       if (url.pathname.startsWith("/api/submissions")) {
         return await handlePublicApi(request, env, url);
