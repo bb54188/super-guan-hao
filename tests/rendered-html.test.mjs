@@ -85,7 +85,7 @@ test("renders submission page", async () => {
   assert.doesNotMatch(html, /minlength=["']10["']/i);
 });
 
-test("renders the ChatGPT bug feedback page", async () => {
+test("renders the admin-approved DeepSeek bug feedback page", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `bugs-${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
@@ -100,12 +100,13 @@ test("renders the ChatGPT bug feedback page", async () => {
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /发现问题/);
-  assert.match(html, /交给 ChatGPT/);
-  assert.match(html, /提交 Bug 并自动分析/);
+  assert.match(html, /交给 DeepSeek/);
+  assert.match(html, /提交 Bug，等待管理员确认/);
+  assert.match(html, /只有管理员确认后才会调用 DeepSeek/);
   assert.match(html, /name="steps"/);
   assert.match(html, /name="actual"/);
   assert.match(html, /不含账号、口令、Token/);
-  assert.match(html, /联系方式不会发送给 ChatGPT/);
+  assert.match(html, /联系方式不会发送给 DeepSeek/);
 });
 
 test("stores a private bug report and protects its progress token", async () => {
@@ -182,12 +183,11 @@ test("stores a private bug report and protects its progress token", async () => 
   assert.equal("contact" in statusResult.report, false);
 });
 
-test("dispatches an enabled bug autofix and accepts only its scoped callback", async () => {
+test("requires admin approval before dispatching DeepSeek autofix", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `bug-dispatch-${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
   const stored = new Map();
-  const background = [];
   const media = {
     put: async (key, value) => {
       stored.set(key, typeof value === "string" ? value : await new Response(value).text());
@@ -222,10 +222,7 @@ test("dispatches an enabled bug autofix and accepts only its scoped callback", a
       MEDIA: media,
       GITHUB_AUTOFIX_TOKEN: "test-github-token",
     };
-    const context = {
-      waitUntil(promise) { background.push(promise); },
-      passThroughOnException() {},
-    };
+    const context = { waitUntil() {}, passThroughOnException() {} };
     const response = await worker.fetch(
       new Request("http://localhost/api/bugs", {
         method: "POST",
@@ -240,9 +237,18 @@ test("dispatches an enabled bug autofix and accepts only its scoped callback", a
     );
     assert.equal(response.status, 202);
     const result = await response.json();
-    assert.equal(result.status, "queued");
-    assert.equal(background.length, 1);
-    await Promise.all(background);
+    assert.equal(result.status, "needs-approval");
+    assert.equal(dispatchedPayload, undefined);
+
+    const approvalResponse = await worker.fetch(
+      new Request(`http://localhost/api/admin/bugs/${result.id}/start`, {
+        method: "POST",
+        headers: { Authorization: "Bearer 13579adgjl" },
+      }),
+      env,
+      context,
+    );
+    assert.equal(approvalResponse.status, 200);
     assert.equal(dispatchedPayload.event_type, "website_bug_report");
     assert.equal(dispatchedPayload.client_payload.id, result.id);
     assert.match(dispatchedPayload.client_payload.callback_token, /^[0-9a-f]{64}$/i);
@@ -280,6 +286,18 @@ test("dispatches an enabled bug autofix and accepts only its scoped callback", a
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("keeps the DeepSeek repair agent inside source directories", async () => {
+  const agentUrl = new URL("../scripts/deepseek-bug-autofix.mjs", import.meta.url);
+  agentUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
+  const { normalizeRepoPath } = await import(agentUrl.href);
+
+  assert.equal(normalizeRepoPath("app/page.tsx"), "app/page.tsx");
+  assert.equal(normalizeRepoPath("tests/rendered-html.test.mjs"), "tests/rendered-html.test.mjs");
+  assert.throws(() => normalizeRepoPath("../.env"), /traversal/);
+  assert.throws(() => normalizeRepoPath(".github/workflows/deploy.yml"), /inside/);
+  assert.throws(() => normalizeRepoPath("tests/rendered-html.test.mjs", true), /inside/);
 });
 
 test("renders Zhao Junjie photo series controls", async () => {
