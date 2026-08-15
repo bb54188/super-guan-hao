@@ -8,6 +8,8 @@ on:
     paths:
       - public/fca6cb2f88fa0690d15f0cde3ad718b0.txt
       - worker/index.ts
+      - app/**
+      - public/guan-hao/**
 
 permissions:
   contents: read
