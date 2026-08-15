@@ -102,8 +102,8 @@ jobs:
 
           bug_page="$(curl --fail --silent --show-error --max-time 30 \
             https://guanhao.johncat.top/bugs)"
-          grep -Fq "交给 ChatGPT" <<<"${bug_page}"
-          grep -Fq "提交 Bug 并自动分析" <<<"${bug_page}"
+          grep -Fq "交给 DeepSeek" <<<"${bug_page}"
+          grep -Fq "提交 Bug，等待管理员确认" <<<"${bug_page}"
 
           submissions_json="$(curl --fail --silent --show-error --max-time 30 \
             https://guanhao.johncat.top/api/submissions)"

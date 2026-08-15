@@ -44,7 +44,43 @@ type PendingSubmission = {
   autoClassification?: AutoClassification;
 };
 
+type BugStatus =
+  | "waiting-setup"
+  | "needs-approval"
+  | "queued"
+  | "analyzing"
+  | "testing"
+  | "patch-ready"
+  | "needs-review"
+  | "failed";
+
+type BugReport = {
+  id: string;
+  title: string;
+  pagePath: string;
+  steps: string;
+  expected: string;
+  actual: string;
+  environment: string;
+  contact?: string;
+  createdAt: string;
+  updatedAt: string;
+  status: BugStatus;
+  statusMessage: string;
+  fixUrl?: string;
+};
+
 const categoryLabel = { photo: "图片", video: "视频", story: "事迹", series: "系列" };
+const bugStatusLabel: Record<BugStatus, string> = {
+  "waiting-setup": "等待配置",
+  "needs-approval": "等待确认",
+  queued: "已排队",
+  analyzing: "DeepSeek 分析中",
+  testing: "测试中",
+  "patch-ready": "修复提案完成",
+  "needs-review": "需要人工处理",
+  failed: "处理失败",
+};
 const imageSeriesOptions: Array<{ value: ImageSeries; label: string }> = [
   { value: "wet-hair", label: "清晨洗头" },
   { value: "bedside-gaming", label: "床铺游戏" },
@@ -76,13 +112,19 @@ function submissionMedia(item: PendingSubmission): PendingMedia[] {
   ];
 }
 
+function canStartBug(status: BugStatus): boolean {
+  return ["waiting-setup", "needs-approval", "needs-review", "failed"].includes(status);
+}
+
 export default function ReviewPage() {
   const [token, setToken] = useState("");
   const [draftToken, setDraftToken] = useState("");
   const [items, setItems] = useState<PendingSubmission[]>([]);
+  const [bugs, setBugs] = useState<BugReport[]>([]);
   const [seriesSelections, setSeriesSelections] = useState<Record<string, ImageSeries>>({});
   const [message, setMessage] = useState("请输入审核口令。口令只保存在当前浏览器标签页。");
   const [loading, setLoading] = useState(false);
+  const [startingBugId, setStartingBugId] = useState("");
 
   async function request(path: string, currentToken: string, init?: RequestInit) {
     const response = await fetch(path, {
@@ -94,6 +136,8 @@ export default function ReviewPage() {
     });
     const result = (await response.json()) as {
       submissions?: PendingSubmission[];
+      bugs?: BugReport[];
+      report?: BugReport;
       message?: string;
       error?: string;
     };
@@ -105,8 +149,12 @@ export default function ReviewPage() {
     if (!currentToken) return;
     setLoading(true);
     try {
-      const result = await request("/api/admin/submissions", currentToken);
-      const submissions = result.submissions ?? [];
+      const [submissionResult, bugResult] = await Promise.all([
+        request("/api/admin/submissions", currentToken),
+        request("/api/admin/bugs", currentToken),
+      ]);
+      const submissions = submissionResult.submissions ?? [];
+      const bugReports = bugResult.bugs ?? [];
       const selections: Record<string, ImageSeries> = {};
       for (const item of submissions) {
         if (item.category === "photo") {
@@ -114,10 +162,12 @@ export default function ReviewPage() {
         }
       }
       setItems(submissions);
+      setBugs(bugReports);
       setSeriesSelections(selections);
-      setMessage(result.submissions?.length ? `共有 ${result.submissions.length} 条待审核投稿。` : "目前没有待审核投稿。");
+      setMessage(`待审核投稿 ${submissions.length} 条，Bug 报告 ${bugReports.length} 条。`);
     } catch (error) {
       setItems([]);
+      setBugs([]);
       setMessage(error instanceof Error ? error.message : "审核列表加载失败");
     } finally {
       setLoading(false);
@@ -173,6 +223,32 @@ export default function ReviewPage() {
     }
   }
 
+  async function startBugAutofix(item: BugReport) {
+    if (
+      !window.confirm(
+        `确认把「${item.title}」交给 DeepSeek 修复吗？这一步会使用你的 DeepSeek API 额度。`,
+      )
+    ) return;
+    setStartingBugId(item.id);
+    try {
+      const result = await request(`/api/admin/bugs/${item.id}/start`, token, {
+        method: "POST",
+      });
+      const report = result.report;
+      if (report) {
+        setBugs((current) => current.map((bug) => (
+          bug.id === report.id ? report : bug
+        )));
+      }
+      setMessage(result.message ?? "DeepSeek 修复任务已启动。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "DeepSeek 修复任务启动失败");
+      await load(token);
+    } finally {
+      setStartingBugId("");
+    }
+  }
+
   async function openMedia(id: string, index: number) {
     try {
       const response = await fetch(`/api/admin/submissions/${id}/media/${index}`, {
@@ -199,6 +275,7 @@ export default function ReviewPage() {
     setToken("");
     setDraftToken("");
     setItems([]);
+    setBugs([]);
     setSeriesSelections({});
     setMessage("审核页面已锁定。");
   }
@@ -215,8 +292,8 @@ export default function ReviewPage() {
 
       <header className="community-hero review-hero">
         <p className="section-kicker">PRIVATE REVIEW · 管理员</p>
-        <h1>投稿审核台。</h1>
-        <p>通过后内容立即进入公开投稿区；拒绝会删除待审记录及其上传文件。</p>
+        <h1>内容与 Bug 审核台。</h1>
+        <p>投稿通过后立即上架；Bug 只有在你确认后才会调用 DeepSeek 并使用 API 额度。</p>
       </header>
 
       <section className="review-console">
@@ -244,7 +321,66 @@ export default function ReviewPage() {
 
         {!token && <p className="review-message">{message}</p>}
 
+        {token && (
+          <section className="review-queue" aria-labelledby="bug-review-heading">
+            <header className="review-section-heading">
+              <div>
+                <span>BUG APPROVAL</span>
+                <h2 id="bug-review-heading">Bug 修复队列</h2>
+              </div>
+              <p>点击按钮前会再次确认；公开访客不能直接调用 DeepSeek。</p>
+            </header>
+            <div className="review-list">
+              {bugs.length === 0 && <p className="review-empty">目前没有 Bug 报告。</p>}
+              {bugs.map((item) => (
+                <article className="review-card review-bug-card" key={item.id}>
+                  <header>
+                    <span>{bugStatusLabel[item.status]} · #{item.id.slice(0, 8).toUpperCase()}</span>
+                    <time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString("zh-CN")}</time>
+                  </header>
+                  <h2>{item.title}</h2>
+                  <p>{item.statusMessage}</p>
+                  <dl>
+                    <div><dt>问题页面</dt><dd>{item.pagePath}</dd></div>
+                    <div><dt>联系方式</dt><dd>{item.contact || "未填写"}</dd></div>
+                    <div><dt>设备与浏览器</dt><dd>{item.environment}</dd></div>
+                    <div><dt>复现步骤</dt><dd>{item.steps}</dd></div>
+                    <div><dt>实际结果</dt><dd>{item.actual}</dd></div>
+                    <div><dt>期望结果</dt><dd>{item.expected || "未填写"}</dd></div>
+                  </dl>
+                  <footer>
+                    {item.fixUrl && (
+                      <a className="review-source" href={item.fixUrl} target="_blank" rel="noreferrer">
+                        查看修复提案 ↗
+                      </a>
+                    )}
+                    {canStartBug(item.status) && (
+                      <button
+                        className="review-approve"
+                        disabled={startingBugId === item.id}
+                        onClick={() => void startBugAutofix(item)}
+                      >
+                        {startingBugId === item.id ? "正在启动" : "交给 DeepSeek 修复"}
+                      </button>
+                    )}
+                  </footer>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {token && (
+        <section className="review-queue" aria-labelledby="submission-review-heading">
+          <header className="review-section-heading">
+            <div>
+              <span>CONTENT APPROVAL</span>
+              <h2 id="submission-review-heading">投稿审核队列</h2>
+            </div>
+            <p>通过后内容立即进入公开投稿区；拒绝会删除待审记录和上传文件。</p>
+          </header>
         <div className="review-list">
+          {items.length === 0 && <p className="review-empty">目前没有待审核投稿。</p>}
           {items.map((item) => {
             const media = submissionMedia(item);
             return (
@@ -326,6 +462,8 @@ export default function ReviewPage() {
             );
           })}
         </div>
+        </section>
+        )}
       </section>
     </main>
   );

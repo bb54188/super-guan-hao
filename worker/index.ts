@@ -108,6 +108,7 @@ type UploadSession = {
 
 type BugStatus =
   | "waiting-setup"
+  | "needs-approval"
   | "queued"
   | "analyzing"
   | "testing"
@@ -290,6 +291,7 @@ function validId(value: string): boolean {
 function isBugStatus(value: unknown): value is BugStatus {
   return (
     value === "waiting-setup" ||
+    value === "needs-approval" ||
     value === "queued" ||
     value === "analyzing" ||
     value === "testing" ||
@@ -619,7 +621,7 @@ async function dispatchBugAutofix(
   report: BugReportRecord,
   callbackToken: string,
   githubToken: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const response = await fetch(GITHUB_AUTOFIX_ENDPOINT, {
       method: "POST",
@@ -651,8 +653,9 @@ async function dispatchBugAutofix(
       ...report,
       updatedAt: new Date().toISOString(),
       status: "queued",
-      statusMessage: "报告已进入 ChatGPT 修复队列，正在等待自动分析。",
+      statusMessage: "管理员已批准，报告已进入 DeepSeek 修复队列。",
     });
+    return true;
   } catch (error) {
     console.error(
       JSON.stringify({
@@ -667,13 +670,13 @@ async function dispatchBugAutofix(
       status: "failed",
       statusMessage: "自动修复通道暂时连接失败，报告已经保存，管理员可稍后重试。",
     });
+    return false;
   }
 }
 
 async function createBugReport(
   request: Request,
   env: WorkerEnv,
-  ctx: ExecutionContext,
 ): Promise<Response> {
   const contentType = request.headers.get("content-type") ?? "";
   if (!contentType.startsWith("application/json")) {
@@ -728,7 +731,6 @@ async function createBugReport(
 
   const id = crypto.randomUUID();
   const statusToken = randomToken();
-  const callbackToken = randomToken();
   const now = new Date().toISOString();
   const githubToken = githubAutofixToken(env);
   const report: BugReportRecord = {
@@ -742,12 +744,12 @@ async function createBugReport(
     ...(contact ? { contact } : {}),
     createdAt: now,
     updatedAt: now,
-    status: githubToken ? "queued" : "waiting-setup",
+    status: githubToken ? "needs-approval" : "waiting-setup",
     statusMessage: githubToken
-      ? "报告已保存，正在交给 ChatGPT 自动分析。"
-      : "报告已保存；自动修复凭证尚未配置，等待管理员启用。",
+      ? "报告已保存，等待管理员确认后再交给 DeepSeek 分析。"
+      : "报告已保存；GitHub 自动修复凭证尚未配置，等待管理员启用。",
     statusTokenHash: await sha256Hex(statusToken),
-    callbackTokenHash: await sha256Hex(callbackToken),
+    callbackTokenHash: await sha256Hex(randomToken()),
   };
 
   const writes: Promise<unknown>[] = [writeBugReport(env, report)];
@@ -762,10 +764,6 @@ async function createBugReport(
   }
   await Promise.all(writes);
 
-  if (githubToken) {
-    ctx.waitUntil(dispatchBugAutofix(env, report, callbackToken, githubToken));
-  }
-
   return json(
     {
       ok: true,
@@ -773,7 +771,7 @@ async function createBugReport(
       trackingToken: statusToken,
       status: report.status,
       statusMessage: report.statusMessage,
-      message: "Bug 已提交。你可以留在本页查看自动修复进度。",
+      message: "Bug 已提交。管理员确认后才会启动 DeepSeek 修复并产生 API 费用。",
     },
     202,
   );
@@ -881,6 +879,94 @@ async function listSubmissions(
   return records
     .filter((record): record is SubmissionRecord => record !== null)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+function adminBugReport(report: BugReportRecord): Record<string, unknown> {
+  return {
+    id: report.id,
+    title: report.title,
+    pagePath: report.pagePath,
+    steps: report.steps,
+    expected: report.expected,
+    actual: report.actual,
+    environment: report.environment,
+    contact: report.contact,
+    createdAt: report.createdAt,
+    updatedAt: report.updatedAt,
+    status: report.status,
+    statusMessage: report.statusMessage,
+    fixUrl: report.fixUrl,
+  };
+}
+
+async function listBugReports(env: WorkerEnv): Promise<Record<string, unknown>[]> {
+  const listed = await env.MEDIA.list({
+    prefix: `${BUG_REPORT_ROOT}/reports/`,
+    limit: 50,
+  });
+  const reports = await Promise.all(
+    listed.objects.map((object) => {
+      const id = object.key.slice(object.key.lastIndexOf("/") + 1).replace(/\.json$/, "");
+      return validId(id) ? readBugReport(env, id) : Promise.resolve(null);
+    }),
+  );
+  return reports
+    .filter((report): report is BugReportRecord => report !== null)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map(adminBugReport);
+}
+
+function canStartBugAutofix(status: BugStatus): boolean {
+  return (
+    status === "needs-approval" ||
+    status === "waiting-setup" ||
+    status === "needs-review" ||
+    status === "failed"
+  );
+}
+
+async function startBugAutofix(
+  env: WorkerEnv,
+  id: string,
+): Promise<Response> {
+  if (!validId(id)) return json({ error: "无效的 Bug 编号。" }, 400);
+  const report = await readBugReport(env, id);
+  if (!report) return json({ error: "没有找到这条 Bug 反馈。" }, 404);
+  if (!canStartBugAutofix(report.status)) {
+    return json({ error: "这条 Bug 已经在处理中或已有修复提案。" }, 409);
+  }
+
+  const githubToken = githubAutofixToken(env);
+  if (!githubToken) {
+    return json({ error: "尚未配置 GITHUB_AUTOFIX_TOKEN，暂时不能启动修复。" }, 503);
+  }
+
+  const callbackToken = randomToken();
+  const queued: BugReportRecord = {
+    ...report,
+    updatedAt: new Date().toISOString(),
+    status: "queued",
+    statusMessage: "管理员已批准，正在建立 DeepSeek 修复任务。",
+    callbackTokenHash: await sha256Hex(callbackToken),
+    fixUrl: undefined,
+  };
+  await writeBugReport(env, queued);
+  const dispatched = await dispatchBugAutofix(env, queued, callbackToken, githubToken);
+  const latest = (await readBugReport(env, id)) ?? queued;
+  if (!dispatched) {
+    return json(
+      {
+        error: "GitHub 修复任务启动失败，报告已保留，可以稍后重试。",
+        report: adminBugReport(latest),
+      },
+      502,
+    );
+  }
+  return json({
+    ok: true,
+    message: "已交给 DeepSeek 修复。任务只会生成等待确认的草稿提案。",
+    report: adminBugReport(latest),
+  });
 }
 
 async function verifyReviewToken(request: Request): Promise<boolean> {
@@ -1328,6 +1414,16 @@ async function handleAdminApi(request: Request, env: WorkerEnv, url: URL): Promi
     return json({ submissions: await listSubmissions(env, "pending") });
   }
 
+  if (url.pathname === "/api/admin/bugs" && request.method === "GET") {
+    return json({ bugs: await listBugReports(env) });
+  }
+
+  const bugStartMatch = url.pathname.match(/^\/api\/admin\/bugs\/([^/]+)\/start$/);
+  if (bugStartMatch) {
+    if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
+    return startBugAutofix(env, bugStartMatch[1]);
+  }
+
   const mediaMatch = url.pathname.match(
     /^\/api\/admin\/submissions\/([^/]+)\/media(?:\/(\d+))?$/,
   );
@@ -1413,11 +1509,11 @@ const worker = {
         });
       }
 
-      if (url.pathname.startsWith("/api/admin/submissions")) {
+      if (url.pathname.startsWith("/api/admin/")) {
         return await handleAdminApi(request, env, url);
       }
       if (url.pathname === "/api/bugs" && request.method === "POST") {
-        return await createBugReport(request, env, ctx);
+        return await createBugReport(request, env);
       }
       const bugStatusMatch = url.pathname.match(/^\/api\/bugs\/([^/]+)\/status$/);
       if (bugStatusMatch) {
