@@ -322,7 +322,7 @@ export function PersonProfile({ profile }: { profile: PersonProfileData }) {
         <a href="/">超级大关昊</a>
         <p>非官方校园影像档案 · 仅供同学间欣赏</p>
         <p>© 2026 CHARACTER ARCHIVE</p>
-        <p className="photo-credit">照片由千秋雯提供</p>
+        <p className="photo-credit">部分照片由千秋雯提供</p>
       </footer>
     </main>
   );
