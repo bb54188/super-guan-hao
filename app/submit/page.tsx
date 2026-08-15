@@ -18,10 +18,42 @@ type UploadResult = {
 const MAX_UPLOAD_BYTES = 80 * 1024 * 1024;
 
 const categoryNotes = {
-  photo: "校园照片、聊天截图或人物影像",
+  photo: "上传后自动识别场景并建议图片系列",
   video: "短视频、现场记录或外部素材链接",
   story: "人物事迹、校园传说或名场面文字",
 };
+
+async function createClassificationPreview(file: File): Promise<string | undefined> {
+  if (!file.type.startsWith("image/")) return undefined;
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    const loaded = new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("图片预览读取失败"));
+    });
+    image.src = objectUrl;
+    await loaded;
+
+    const maxEdge = 768;
+    const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return undefined;
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+    const preview = canvas.toDataURL("image/jpeg", 0.72);
+    return preview.startsWith("data:image/jpeg;base64,") ? preview : undefined;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
 
 export default function SubmitPage() {
   const [category, setCategory] = useState<keyof typeof categoryNotes>("photo");
@@ -34,6 +66,7 @@ export default function SubmitPage() {
     const mediaEntry = formData.get("media");
     const media = mediaEntry instanceof File && mediaEntry.size > 0 ? mediaEntry : null;
     let uploaded: UploadResult | null = null;
+    let classificationPreview: string | undefined;
 
     try {
       if (media && media.size > MAX_UPLOAD_BYTES) {
@@ -41,7 +74,11 @@ export default function SubmitPage() {
       }
 
       if (media) {
-        setState({ kind: "uploading", message: "正在上传素材，请不要关闭页面……" });
+        if (media.type.startsWith("image/")) {
+          setState({ kind: "uploading", message: "正在生成图片识别预览……" });
+          classificationPreview = await createClassificationPreview(media).catch(() => undefined);
+        }
+        setState({ kind: "uploading", message: "正在上传原始素材，请不要关闭页面……" });
         const uploadResponse = await fetch("/api/submission-uploads", {
           method: "PUT",
           headers: {
@@ -65,7 +102,13 @@ export default function SubmitPage() {
         };
       }
 
-      setState({ kind: "sending", message: "素材已就绪，正在提交投稿信息……" });
+      setState({
+        kind: "sending",
+        message:
+          category === "photo"
+            ? "素材已就绪，正在识别画面类型并提交审核……"
+            : "素材已就绪，正在提交投稿信息……",
+      });
       const response = await fetch("/api/submissions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -78,6 +121,7 @@ export default function SubmitPage() {
           sourceUrl: formData.get("sourceUrl"),
           website: formData.get("website"),
           agreement: formData.get("agreement") === "yes",
+          ...(classificationPreview ? { classificationPreview } : {}),
           ...(uploaded ?? {}),
         }),
       });
@@ -119,23 +163,25 @@ export default function SubmitPage() {
       <header className="community-hero">
         <p className="section-kicker">COMMUNITY SUBMISSION · 公开投稿</p>
         <h1>把新的<br />名场面投进来。</h1>
-        <p>图片、视频与事迹分开归档。投稿通过人工审核后，会自动出现在投稿区。</p>
+        <p>图片上传后会自动识别画面类型并建议系列；管理员确认分类后，内容才会进入公开投稿区。</p>
         <div className="community-process" aria-label="投稿流程">
           <span><b>01</b> 填写投稿</span>
-          <span><b>02</b> 管理员审核</span>
-          <span><b>03</b> 自动上架</span>
+          <span><b>02</b> 智能识别</span>
+          <span><b>03</b> 管理员确认</span>
+          <span><b>04</b> 分类上架</span>
         </div>
       </header>
 
       <section className="submission-layout">
         <aside className="submission-guide">
           <span>投稿须知</span>
-          <h2>先分类，<br />再归档。</h2>
+          <h2>自动识别，<br />人工确认。</h2>
           <ul>
             <li>投稿人会公开显示，联系方式不会公开。</li>
             <li>单个上传文件不超过 80 MB；更大的视频可填写素材链接。</li>
+            <li>系统只分析图片场景，不进行人脸身份识别；无法可靠判断时归入“待整理”。</li>
             <li>不得上传隐私、违法内容或未经允许的他人影像。</li>
-            <li>管理员可根据内容调整标题、说明或拒绝投稿。</li>
+            <li>管理员可在上架前修改图片系列，或拒绝投稿。</li>
           </ul>
         </aside>
 
@@ -186,8 +232,17 @@ export default function SubmitPage() {
 
           <label className="field file-field">
             <span>上传素材</span>
-            <input name="media" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" />
-            <small>支持 JPG、PNG、WebP、GIF、MP4、WebM，最大 80 MB。</small>
+            <input
+              name="media"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (file?.type.startsWith("image/")) setCategory("photo");
+                if (file?.type.startsWith("video/")) setCategory("video");
+              }}
+            />
+            <small>支持 JPG、PNG、WebP、GIF、MP4、WebM，最大 80 MB。图片会生成低分辨率预览用于自动分类，原图保持不变。</small>
           </label>
 
           <label className="field">

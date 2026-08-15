@@ -4,6 +4,16 @@
 import { useEffect, useState } from "react";
 
 type Category = "all" | "photo" | "video" | "story";
+type ImageSeries =
+  | "wet-hair"
+  | "bedside-gaming"
+  | "dorm-portraits"
+  | "campus-duo"
+  | "quote-log"
+  | "event-album"
+  | "other-photo"
+  | "unclassified";
+type ImageSeriesFilter = "all" | ImageSeries;
 type Submission = {
   id: string;
   category: Exclude<Category, "all">;
@@ -16,6 +26,8 @@ type Submission = {
   mediaType?: string;
   mediaName?: string;
   mediaUrl?: string;
+  series?: ImageSeries;
+  seriesLabel?: string;
 };
 
 const categories: Array<{ value: Category; label: string }> = [
@@ -26,16 +38,31 @@ const categories: Array<{ value: Category; label: string }> = [
 ];
 
 const categoryLabel = { photo: "图片", video: "视频", story: "事迹" };
+const imageSeries: Array<{ value: ImageSeriesFilter; label: string }> = [
+  { value: "all", label: "全部系列" },
+  { value: "wet-hair", label: "清晨洗头" },
+  { value: "bedside-gaming", label: "床铺游戏" },
+  { value: "dorm-portraits", label: "床铺肖像" },
+  { value: "campus-duo", label: "校园同框" },
+  { value: "quote-log", label: "聊天记录" },
+  { value: "event-album", label: "事件图册" },
+  { value: "other-photo", label: "其他影像" },
+  { value: "unclassified", label: "待整理" },
+];
 
 export default function SubmissionsPage() {
   const [category, setCategory] = useState<Category>("all");
+  const [series, setSeries] = useState<ImageSeriesFilter>("all");
   const [items, setItems] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
-    const query = category === "all" ? "" : `?category=${category}`;
+    const searchParams = new URLSearchParams();
+    if (category !== "all") searchParams.set("category", category);
+    if (category === "photo" && series !== "all") searchParams.set("series", series);
+    const query = searchParams.size > 0 ? `?${searchParams.toString()}` : "";
     fetch(`/api/submissions${query}`, { signal: controller.signal })
       .then(async (response) => {
         const result = (await response.json()) as { submissions?: Submission[]; error?: string };
@@ -48,7 +75,7 @@ export default function SubmissionsPage() {
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
-  }, [category]);
+  }, [category, series]);
 
   return (
     <main className="community-page community-archive-page">
@@ -63,7 +90,7 @@ export default function SubmissionsPage() {
       <header className="community-hero archive-hero">
         <p className="section-kicker">APPROVED SUBMISSIONS · 审核发布</p>
         <h1>校园投稿区。</h1>
-        <p>这里仅展示已经通过管理员审核的图片、视频和事迹，并注明投稿人。</p>
+        <p>这里仅展示已经通过管理员审核的图片、视频和事迹；图片会按自动识别并人工确认的系列归档。</p>
         <a className="archive-submit-link" href="/submit">提交新内容 <span aria-hidden="true">↗</span></a>
       </header>
 
@@ -73,21 +100,42 @@ export default function SubmissionsPage() {
             <p className="section-kicker">ONE-CLICK FILTER</p>
             <h2 id="archive-title">一键分类浏览。</h2>
           </div>
-          <div className="archive-filters" role="group" aria-label="投稿分类筛选">
-            {categories.map((item) => (
-              <button
-                key={item.value}
-                className={category === item.value ? "is-active" : ""}
-                onClick={() => {
-                  if (item.value === category) return;
-                  setLoading(true);
-                  setError("");
-                  setCategory(item.value);
-                }}
-              >
-                {item.label}
-              </button>
-            ))}
+          <div className="archive-filter-stack">
+            <div className="archive-filters" role="group" aria-label="投稿分类筛选">
+              {categories.map((item) => (
+                <button
+                  key={item.value}
+                  className={category === item.value ? "is-active" : ""}
+                  onClick={() => {
+                    if (item.value === category) return;
+                    setLoading(true);
+                    setError("");
+                    setSeries("all");
+                    setCategory(item.value);
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            {category === "photo" && (
+              <div className="archive-filters archive-series-filters" role="group" aria-label="图片系列筛选">
+                {imageSeries.map((item) => (
+                  <button
+                    key={item.value}
+                    className={series === item.value ? "is-active" : ""}
+                    onClick={() => {
+                      if (item.value === series) return;
+                      setLoading(true);
+                      setError("");
+                      setSeries(item.value);
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </header>
 
@@ -116,7 +164,10 @@ export default function SubmissionsPage() {
               )}
               <div className="community-card-copy">
                 <div className="community-card-meta">
-                  <span>{categoryLabel[item.category]}</span>
+                  <span>
+                    {categoryLabel[item.category]}
+                    {item.category === "photo" && item.seriesLabel ? ` · ${item.seriesLabel}` : ""}
+                  </span>
                   <time dateTime={item.approvedAt ?? item.createdAt}>
                     {new Date(item.approvedAt ?? item.createdAt).toLocaleDateString("zh-CN")}
                   </time>

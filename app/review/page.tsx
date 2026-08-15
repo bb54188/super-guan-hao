@@ -3,6 +3,23 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
+type ImageSeries =
+  | "wet-hair"
+  | "bedside-gaming"
+  | "dorm-portraits"
+  | "campus-duo"
+  | "quote-log"
+  | "event-album"
+  | "other-photo"
+  | "unclassified";
+
+type AutoClassification = {
+  suggestedSeries: ImageSeries;
+  confidence: number;
+  summary: string;
+  status: "classified" | "needs-review";
+};
+
 type PendingSubmission = {
   id: string;
   category: "photo" | "video" | "story";
@@ -15,14 +32,35 @@ type PendingSubmission = {
   mediaKey?: string;
   mediaType?: string;
   mediaName?: string;
+  series?: ImageSeries;
+  autoClassification?: AutoClassification;
 };
 
 const categoryLabel = { photo: "图片", video: "视频", story: "事迹" };
+const imageSeriesOptions: Array<{ value: ImageSeries; label: string }> = [
+  { value: "wet-hair", label: "清晨洗头" },
+  { value: "bedside-gaming", label: "床铺游戏" },
+  { value: "dorm-portraits", label: "床铺肖像" },
+  { value: "campus-duo", label: "校园同框" },
+  { value: "quote-log", label: "聊天记录" },
+  { value: "event-album", label: "事件图册" },
+  { value: "other-photo", label: "其他影像" },
+  { value: "unclassified", label: "待整理" },
+];
+
+function imageSeriesLabel(series: ImageSeries): string {
+  return imageSeriesOptions.find((item) => item.value === series)?.label ?? "待整理";
+}
+
+function isImageSeries(value: string): value is ImageSeries {
+  return imageSeriesOptions.some((item) => item.value === value);
+}
 
 export default function ReviewPage() {
   const [token, setToken] = useState("");
   const [draftToken, setDraftToken] = useState("");
   const [items, setItems] = useState<PendingSubmission[]>([]);
+  const [seriesSelections, setSeriesSelections] = useState<Record<string, ImageSeries>>({});
   const [message, setMessage] = useState("请输入审核口令。口令只保存在当前浏览器标签页。");
   const [loading, setLoading] = useState(false);
 
@@ -48,7 +86,15 @@ export default function ReviewPage() {
     setLoading(true);
     try {
       const result = await request("/api/admin/submissions", currentToken);
-      setItems(result.submissions ?? []);
+      const submissions = result.submissions ?? [];
+      const selections: Record<string, ImageSeries> = {};
+      for (const item of submissions) {
+        if (item.category === "photo") {
+          selections[item.id] = item.series ?? "unclassified";
+        }
+      }
+      setItems(submissions);
+      setSeriesSelections(selections);
       setMessage(result.submissions?.length ? `共有 ${result.submissions.length} 条待审核投稿。` : "目前没有待审核投稿。");
     } catch (error) {
       setItems([]);
@@ -82,8 +128,23 @@ export default function ReviewPage() {
     if (!window.confirm(`确认${label}这条投稿吗？`)) return;
     setLoading(true);
     try {
-      const result = await request(`/api/admin/submissions/${id}/${action}`, token, { method: "POST" });
+      const result = await request(
+        `/api/admin/submissions/${id}/${action}`,
+        token,
+        action === "approve"
+          ? {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ series: seriesSelections[id] ?? "unclassified" }),
+            }
+          : { method: "POST" },
+      );
       setItems((current) => current.filter((item) => item.id !== id));
+      setSeriesSelections((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
       setMessage(result.message ?? `投稿已${label}。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "审核操作失败");
@@ -118,6 +179,7 @@ export default function ReviewPage() {
     setToken("");
     setDraftToken("");
     setItems([]);
+    setSeriesSelections({});
     setMessage("审核页面已锁定。");
   }
 
@@ -176,6 +238,47 @@ export default function ReviewPage() {
                 <div><dt>联系方式</dt><dd>{item.contact || "未填写"}</dd></div>
                 <div><dt>上传文件</dt><dd>{item.mediaName || "无"}</dd></div>
               </dl>
+              {item.category === "photo" && (
+                <section className="review-classification" aria-label="图片自动分类结果">
+                  <div className="review-classification-result">
+                    <span>
+                      {item.autoClassification?.status === "classified"
+                        ? "AUTO CLASSIFIED"
+                        : "NEEDS REVIEW"}
+                    </span>
+                    <strong>
+                      智能建议 · {imageSeriesLabel(item.autoClassification?.suggestedSeries ?? "unclassified")}
+                    </strong>
+                    <em>
+                      {item.autoClassification
+                        ? `${Math.round(item.autoClassification.confidence * 100)}%`
+                        : "—"}
+                    </em>
+                  </div>
+                  <p>
+                    {item.autoClassification?.summary ??
+                      "这张图片尚未得到可靠识别结果，请人工选择系列。"}
+                  </p>
+                  <label>
+                    <span>审核后归入系列</span>
+                    <select
+                      value={seriesSelections[item.id] ?? "unclassified"}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        if (!isImageSeries(value)) return;
+                        setSeriesSelections((current) => ({
+                          ...current,
+                          [item.id]: value,
+                        }));
+                      }}
+                    >
+                      {imageSeriesOptions.map((series) => (
+                        <option key={series.value} value={series.value}>{series.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                </section>
+              )}
               {item.sourceUrl && <a className="review-source" href={item.sourceUrl} target="_blank" rel="noreferrer">查看素材链接 ↗</a>}
               <footer>
                 {item.mediaKey && <button onClick={() => void openMedia(item.id)}>查看上传素材</button>}

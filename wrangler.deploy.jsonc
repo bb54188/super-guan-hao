@@ -21,6 +21,9 @@
       "bucket_name": "super-guan-hao-media"
     }
   ],
+  "ai": {
+    "binding": "AI"
+  },
   "observability": {
     "enabled": true
   }

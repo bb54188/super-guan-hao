@@ -47,6 +47,7 @@ test("renders submission page", async () => {
   const html = await response.text();
   assert.match(html, /把新的/);
   assert.match(html, /投稿人/);
+  assert.match(html, /自动识别/);
 });
 
 test("renders Zhao Junjie photo series controls", async () => {
@@ -160,4 +161,120 @@ test("streams an accepted media upload into R2", async () => {
     [...stored.keys()].some((key) => key.includes("/uploads/") && key.endsWith(".json")),
     true,
   );
+});
+
+test("classifies an uploaded image and stores its suggested series", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `classify-${process.pid}-${Date.now()}`);
+  const { default: worker } = await import(workerUrl.href);
+  const stored = new Map();
+  let aiCalls = 0;
+  const mediaBinding = {
+    put: async (key, value) => {
+      if (typeof value === "string") {
+        stored.set(key, { kind: "text", value });
+      } else {
+        stored.set(key, {
+          kind: "bytes",
+          value: await new Response(value).arrayBuffer(),
+        });
+      }
+      return {};
+    },
+    get: async (key) => {
+      const object = stored.get(key);
+      if (!object) return null;
+      if (object.kind === "text") {
+        return {
+          size: new TextEncoder().encode(object.value).byteLength,
+          json: async () => JSON.parse(object.value),
+          arrayBuffer: async () => new TextEncoder().encode(object.value).buffer,
+        };
+      }
+      return {
+        size: object.value.byteLength,
+        json: async () => JSON.parse(new TextDecoder().decode(object.value)),
+        arrayBuffer: async () => object.value,
+      };
+    },
+    delete: async (keys) => {
+      for (const key of Array.isArray(keys) ? keys : [keys]) stored.delete(key);
+    },
+  };
+  const env = {
+    ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
+    MEDIA: mediaBinding,
+    AI: {
+      run: async () => {
+        aiCalls += 1;
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  series: "bedside-gaming",
+                  confidence: 0.91,
+                  summary: "宿舍床铺边正在使用手机的生活抓拍",
+                }),
+              },
+            },
+          ],
+        };
+      },
+    },
+  };
+  const context = { waitUntil() {}, passThroughOnException() {} };
+  const image = new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], {
+    type: "image/jpeg",
+  });
+  const uploadResponse = await worker.fetch(
+    new Request("http://localhost/api/submission-uploads", {
+      method: "PUT",
+      headers: {
+        "content-length": String(image.size),
+        "content-type": image.type,
+        "x-file-name": encodeURIComponent("宿舍照片.jpg"),
+        "x-submission-category": "photo",
+      },
+      body: image,
+    }),
+    env,
+    context,
+  );
+  assert.equal(uploadResponse.status, 201);
+  const upload = await uploadResponse.json();
+
+  const body = JSON.stringify({
+    category: "photo",
+    title: "宿舍游戏时刻",
+    description: "赵俊杰在宿舍床铺边使用手机的一张生活抓拍照片。",
+    submitter: "测试投稿人",
+    agreement: true,
+    uploadId: upload.uploadId,
+    uploadToken: upload.uploadToken,
+    classificationPreview: "data:image/jpeg;base64,/9j/2Q==",
+  });
+  const submissionResponse = await worker.fetch(
+    new Request("http://localhost/api/submissions", {
+      method: "POST",
+      headers: {
+        "content-length": String(new TextEncoder().encode(body).byteLength),
+        "content-type": "application/json",
+      },
+      body,
+    }),
+    env,
+    context,
+  );
+
+  assert.equal(submissionResponse.status, 201);
+  assert.equal(aiCalls, 1);
+  const pendingKey = [...stored.keys()].find(
+    (key) => key.includes("/pending/") && key.endsWith(".json"),
+  );
+  assert.ok(pendingKey);
+  const pending = JSON.parse(stored.get(pendingKey).value);
+  assert.equal(pending.series, "bedside-gaming");
+  assert.equal(pending.autoClassification.suggestedSeries, "bedside-gaming");
+  assert.equal(pending.autoClassification.confidence, 0.91);
 });
