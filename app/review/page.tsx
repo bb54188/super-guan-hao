@@ -20,9 +20,16 @@ type AutoClassification = {
   status: "classified" | "needs-review";
 };
 
+type PendingMedia = {
+  mediaKey: string;
+  mediaType: string;
+  mediaName: string;
+  mediaSize?: number;
+};
+
 type PendingSubmission = {
   id: string;
-  category: "photo" | "video" | "story";
+  category: "photo" | "video" | "story" | "series";
   title: string;
   description: string;
   submitter: string;
@@ -32,11 +39,12 @@ type PendingSubmission = {
   mediaKey?: string;
   mediaType?: string;
   mediaName?: string;
+  mediaItems?: PendingMedia[];
   series?: ImageSeries;
   autoClassification?: AutoClassification;
 };
 
-const categoryLabel = { photo: "图片", video: "视频", story: "事迹" };
+const categoryLabel = { photo: "图片", video: "视频", story: "事迹", series: "系列" };
 const imageSeriesOptions: Array<{ value: ImageSeries; label: string }> = [
   { value: "wet-hair", label: "清晨洗头" },
   { value: "bedside-gaming", label: "床铺游戏" },
@@ -54,6 +62,18 @@ function imageSeriesLabel(series: ImageSeries): string {
 
 function isImageSeries(value: string): value is ImageSeries {
   return imageSeriesOptions.some((item) => item.value === value);
+}
+
+function submissionMedia(item: PendingSubmission): PendingMedia[] {
+  if (item.mediaItems?.length) return item.mediaItems;
+  if (!item.mediaKey) return [];
+  return [
+    {
+      mediaKey: item.mediaKey,
+      mediaType: item.mediaType ?? "application/octet-stream",
+      mediaName: item.mediaName ?? "media",
+    },
+  ];
 }
 
 export default function ReviewPage() {
@@ -153,9 +173,9 @@ export default function ReviewPage() {
     }
   }
 
-  async function openMedia(id: string) {
+  async function openMedia(id: string, index: number) {
     try {
-      const response = await fetch(`/api/admin/submissions/${id}/media`, {
+      const response = await fetch(`/api/admin/submissions/${id}/media/${index}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) {
@@ -225,8 +245,10 @@ export default function ReviewPage() {
         {!token && <p className="review-message">{message}</p>}
 
         <div className="review-list">
-          {items.map((item) => (
-            <article className="review-card" key={item.id}>
+          {items.map((item) => {
+            const media = submissionMedia(item);
+            return (
+              <article className="review-card" key={item.id}>
               <header>
                 <span>{categoryLabel[item.category]}</span>
                 <time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString("zh-CN")}</time>
@@ -236,7 +258,18 @@ export default function ReviewPage() {
               <dl>
                 <div><dt>投稿人</dt><dd>{item.submitter}</dd></div>
                 <div><dt>联系方式</dt><dd>{item.contact || "未填写"}</dd></div>
-                <div><dt>上传文件</dt><dd>{item.mediaName || "无"}</dd></div>
+                <div>
+                  <dt>上传文件</dt>
+                  <dd>
+                    {media.length > 0
+                      ? media.map((mediaItem, index) => (
+                          <span className="review-media-name" key={mediaItem.mediaKey}>
+                            {index + 1}. {mediaItem.mediaName}
+                          </span>
+                        ))
+                      : "无"}
+                  </dd>
+                </div>
               </dl>
               {item.category === "photo" && (
                 <section className="review-classification" aria-label="图片自动分类结果">
@@ -281,12 +314,17 @@ export default function ReviewPage() {
               )}
               {item.sourceUrl && <a className="review-source" href={item.sourceUrl} target="_blank" rel="noreferrer">查看素材链接 ↗</a>}
               <footer>
-                {item.mediaKey && <button onClick={() => void openMedia(item.id)}>查看上传素材</button>}
+                {media.map((mediaItem, index) => (
+                  <button key={mediaItem.mediaKey} onClick={() => void openMedia(item.id, index)}>
+                    查看素材 {media.length > 1 ? index + 1 : ""}
+                  </button>
+                ))}
                 <button className="review-reject" onClick={() => void decide(item.id, "reject")}>拒绝</button>
                 <button className="review-approve" onClick={() => void decide(item.id, "approve")}>通过并上架</button>
               </footer>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
       </section>
     </main>

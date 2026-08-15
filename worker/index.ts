@@ -11,6 +11,7 @@ const WECHAT_VERIFICATION_VALUE = "21d8b5393838f286c4a5bc799c24ce6302a4301b";
 const REVIEW_TOKEN_HASH = "bc928f937c635a385ff46581887676fdd70c8fd09a870092a4edf71a12a4420a";
 const SUBMISSION_ROOT = "community/submissions";
 const MAX_UPLOAD_BYTES = 80 * 1024 * 1024;
+const MAX_MEDIA_ITEMS = 12;
 const MAX_METADATA_BYTES = 2 * 1024 * 1024;
 const MAX_CLASSIFICATION_PREVIEW_LENGTH = 1_500_000;
 const MAX_CLASSIFICATION_FALLBACK_BYTES = 5 * 1024 * 1024;
@@ -51,7 +52,8 @@ const IMAGE_SERIES = {
   },
 } as const;
 
-type SubmissionCategory = "photo" | "video" | "story";
+type SubmissionCategory = "photo" | "video" | "story" | "series";
+type UploadCategory = Exclude<SubmissionCategory, "series">;
 type SubmissionStatus = "pending" | "approved";
 type ImageSeries = keyof typeof IMAGE_SERIES;
 type AutoClassification = {
@@ -60,6 +62,13 @@ type AutoClassification = {
   summary: string;
   status: "classified" | "needs-review";
   model?: string;
+};
+
+type SubmissionMedia = {
+  mediaKey: string;
+  mediaType: string;
+  mediaName: string;
+  mediaSize?: number;
 };
 
 type SubmissionRecord = {
@@ -76,13 +85,14 @@ type SubmissionRecord = {
   mediaKey?: string;
   mediaType?: string;
   mediaName?: string;
+  mediaItems?: SubmissionMedia[];
   series?: ImageSeries;
   autoClassification?: AutoClassification;
 };
 
 type UploadSession = {
   id: string;
-  category: SubmissionCategory;
+  category: UploadCategory;
   tokenHash: string;
   mediaKey: string;
   mediaType: string;
@@ -120,6 +130,10 @@ function cleanText(value: unknown, maxLength: number): string {
 }
 
 function isCategory(value: string): value is SubmissionCategory {
+  return value === "photo" || value === "video" || value === "story" || value === "series";
+}
+
+function isUploadCategory(value: string): value is UploadCategory {
   return value === "photo" || value === "video" || value === "story";
 }
 
@@ -146,6 +160,33 @@ function imageSeriesLabel(series: ImageSeries): string {
   return IMAGE_SERIES[series].label;
 }
 
+function isSubmissionMedia(value: unknown): value is SubmissionMedia {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const media = value as Record<string, unknown>;
+  return (
+    typeof media.mediaKey === "string" &&
+    typeof media.mediaType === "string" &&
+    typeof media.mediaName === "string" &&
+    (media.mediaSize === undefined ||
+      (typeof media.mediaSize === "number" &&
+        Number.isFinite(media.mediaSize) &&
+        media.mediaSize > 0 &&
+        media.mediaSize <= MAX_UPLOAD_BYTES))
+  );
+}
+
+function submissionMedia(record: SubmissionRecord): SubmissionMedia[] {
+  if (record.mediaItems?.length) return record.mediaItems;
+  if (!record.mediaKey) return [];
+  return [
+    {
+      mediaKey: record.mediaKey,
+      mediaType: record.mediaType ?? "application/octet-stream",
+      mediaName: record.mediaName ?? "media",
+    },
+  ];
+}
+
 function isSubmissionRecord(value: unknown): value is SubmissionRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
@@ -158,6 +199,11 @@ function isSubmissionRecord(value: unknown): value is SubmissionRecord {
     typeof record.category === "string" &&
     isCategory(record.category) &&
     (record.status === "pending" || record.status === "approved") &&
+    (record.mediaItems === undefined ||
+      (Array.isArray(record.mediaItems) &&
+        record.mediaItems.length > 0 &&
+        record.mediaItems.length <= MAX_MEDIA_ITEMS &&
+        record.mediaItems.every(isSubmissionMedia))) &&
     (record.series === undefined || isImageSeries(record.series)) &&
     (record.autoClassification === undefined ||
       isAutoClassification(record.autoClassification))
@@ -170,7 +216,7 @@ function isUploadSession(value: unknown): value is UploadSession {
   return (
     typeof upload.id === "string" &&
     typeof upload.category === "string" &&
-    isCategory(upload.category) &&
+    isUploadCategory(upload.category) &&
     typeof upload.tokenHash === "string" &&
     /^[0-9a-f]{64}$/i.test(upload.tokenHash) &&
     typeof upload.mediaKey === "string" &&
@@ -460,7 +506,7 @@ async function createUpload(request: Request, env: WorkerEnv): Promise<Response>
   }
 
   const categoryValue = cleanText(request.headers.get("x-submission-category"), 20);
-  if (!isCategory(categoryValue)) {
+  if (!isUploadCategory(categoryValue)) {
     return json({ error: "请选择图片、视频或事迹分类。" }, 400);
   }
 
@@ -540,6 +586,46 @@ async function deleteUpload(request: Request, env: WorkerEnv, id: string): Promi
   return json({ ok: true });
 }
 
+type UploadClaim = {
+  uploadId: string;
+  uploadToken: string;
+};
+
+function parseUploadClaims(
+  body: Record<string, unknown>,
+): { claims: UploadClaim[] } | { error: string } {
+  const legacyId = cleanText(body.uploadId, 80);
+  const legacyToken = cleanText(body.uploadToken, 128);
+  if (body.uploads === undefined) {
+    if ((legacyId && !legacyToken) || (!legacyId && legacyToken)) {
+      return { error: "上传凭证不完整，请重新选择文件。" };
+    }
+    return { claims: legacyId ? [{ uploadId: legacyId, uploadToken: legacyToken }] : [] };
+  }
+
+  if (legacyId || legacyToken || !Array.isArray(body.uploads)) {
+    return { error: "上传凭证格式无效，请重新选择文件。" };
+  }
+  if (body.uploads.length > MAX_MEDIA_ITEMS) {
+    return { error: `每个系列最多上传 ${MAX_MEDIA_ITEMS} 个文件。` };
+  }
+
+  const claims: UploadClaim[] = [];
+  for (const value of body.uploads) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { error: "上传凭证格式无效，请重新选择文件。" };
+    }
+    const claim = value as Record<string, unknown>;
+    const uploadId = cleanText(claim.uploadId, 80);
+    const uploadToken = cleanText(claim.uploadToken, 128);
+    if (!uploadId || !uploadToken) {
+      return { error: "上传凭证不完整，请重新选择文件。" };
+    }
+    claims.push({ uploadId, uploadToken });
+  }
+  return { claims };
+}
+
 async function createSubmission(request: Request, env: WorkerEnv): Promise<Response> {
   const contentType = request.headers.get("content-type") ?? "";
   if (!contentType.startsWith("application/json")) {
@@ -567,7 +653,7 @@ async function createSubmission(request: Request, env: WorkerEnv): Promise<Respo
     return json({ ok: true, message: "投稿已提交，等待审核。" }, 201);
   }
 
-  const categoryValue = cleanText(body.category, 20);
+  const requestedCategory = cleanText(body.category, 20);
   const title = cleanText(body.title, 60);
   const description = cleanText(body.description, 2000);
   const submitter = cleanText(body.submitter, 30);
@@ -575,12 +661,10 @@ async function createSubmission(request: Request, env: WorkerEnv): Promise<Respo
   const sourceUrlInput = cleanText(body.sourceUrl, 500);
   const sourceUrl = parseSourceUrl(sourceUrlInput);
   const agreement = body.agreement === true;
-  const uploadId = cleanText(body.uploadId, 80);
-  const uploadToken = cleanText(body.uploadToken, 128);
   const submittedClassificationPreview = classificationPreview(body.classificationPreview);
 
-  if (!isCategory(categoryValue)) {
-    return json({ error: "请选择图片、视频或事迹分类。" }, 400);
+  if (!isCategory(requestedCategory)) {
+    return json({ error: "请选择图片、视频、事迹或系列分类。" }, 400);
   }
   if (title.length < 2 || !description || submitter.length < 2) {
     return json({ error: "请完整填写标题、内容和投稿人。" }, 400);
@@ -591,33 +675,50 @@ async function createSubmission(request: Request, env: WorkerEnv): Promise<Respo
   if (sourceUrlInput && !sourceUrl) {
     return json({ error: "素材链接必须是有效的 HTTP 或 HTTPS 地址。" }, 400);
   }
-  if ((uploadId && !uploadToken) || (!uploadId && uploadToken)) {
-    return json({ error: "上传凭证不完整，请重新选择文件。" }, 400);
+  const parsedClaims = parseUploadClaims(body);
+  if ("error" in parsedClaims) return json({ error: parsedClaims.error }, 400);
+  const claimIds = new Set(parsedClaims.claims.map((claim) => claim.uploadId));
+  if (claimIds.size !== parsedClaims.claims.length) {
+    return json({ error: "同一个上传文件不能在系列中重复使用。" }, 400);
   }
 
-  let upload: UploadSession | null = null;
-  if (uploadId) {
-    if (!validId(uploadId)) return json({ error: "无效的上传编号。" }, 400);
-    upload = await readUpload(env, uploadId);
-    if (!upload || !(await verifyToken(uploadToken, upload.tokenHash))) {
+  const uploads: UploadSession[] = [];
+  for (const claim of parsedClaims.claims) {
+    if (!validId(claim.uploadId)) return json({ error: "无效的上传编号。" }, 400);
+    const upload = await readUpload(env, claim.uploadId);
+    if (!upload || !(await verifyToken(claim.uploadToken, upload.tokenHash))) {
       return json({ error: "上传文件不存在或凭证已失效，请重新上传。" }, 400);
     }
-    if (upload.category !== categoryValue) {
-      return json({ error: "投稿分类与已上传文件不一致，请重新上传。" }, 400);
-    }
+    uploads.push(upload);
   }
-  if ((categoryValue === "photo" || categoryValue === "video") && !upload && !sourceUrl) {
+
+  if (
+    uploads.length === 1 &&
+    (requestedCategory === "photo" || requestedCategory === "video") &&
+    uploads[0].category !== requestedCategory
+  ) {
+    return json({ error: "投稿分类与已上传文件不一致，请重新上传。" }, 400);
+  }
+  const categoryValue: SubmissionCategory = uploads.length > 1 ? "series" : requestedCategory;
+  if (categoryValue === "series" && uploads.length < 2) {
+    return json({ error: "系列投稿至少需要选择两个文件。" }, 400);
+  }
+  if (
+    (categoryValue === "photo" || categoryValue === "video") &&
+    uploads.length === 0 &&
+    !sourceUrl
+  ) {
     return json({ error: "图片或视频投稿需要上传文件或填写素材链接。" }, 400);
   }
 
-  const id = upload?.id ?? crypto.randomUUID();
+  const id = uploads[0]?.id ?? crypto.randomUUID();
   let autoClassification: AutoClassification | undefined;
   let series: ImageSeries | undefined;
   if (categoryValue === "photo") {
     let imageDataUrl = submittedClassificationPreview;
-    if (!imageDataUrl && upload) {
+    if (!imageDataUrl && uploads[0]) {
       try {
-        imageDataUrl = await fallbackImagePreview(env, upload);
+        imageDataUrl = await fallbackImagePreview(env, uploads[0]);
       } catch (error) {
         console.warn(
           JSON.stringify({
@@ -635,6 +736,14 @@ async function createSubmission(request: Request, env: WorkerEnv): Promise<Respo
         : "unclassified";
   }
 
+  const mediaItems: SubmissionMedia[] = uploads.map((upload) => ({
+    mediaKey: upload.mediaKey,
+    mediaType: upload.mediaType,
+    mediaName: upload.mediaName,
+    ...(upload.mediaSize ? { mediaSize: upload.mediaSize } : {}),
+  }));
+  const firstMedia = mediaItems[0];
+
   const submission: SubmissionRecord = {
     id,
     category: categoryValue,
@@ -647,11 +756,12 @@ async function createSubmission(request: Request, env: WorkerEnv): Promise<Respo
     status: "pending",
     ...(series ? { series } : {}),
     ...(autoClassification ? { autoClassification } : {}),
-    ...(upload
+    ...(firstMedia
       ? {
-          mediaKey: upload.mediaKey,
-          mediaType: upload.mediaType,
-          mediaName: upload.mediaName,
+          mediaKey: firstMedia.mediaKey,
+          mediaType: firstMedia.mediaType,
+          mediaName: firstMedia.mediaName,
+          mediaItems,
         }
       : {}),
   };
@@ -659,8 +769,8 @@ async function createSubmission(request: Request, env: WorkerEnv): Promise<Respo
   await env.MEDIA.put(pendingKey(id), JSON.stringify(submission), {
     httpMetadata: { contentType: "application/json; charset=utf-8" },
   });
-  if (upload) {
-    await env.MEDIA.delete(uploadKey(id));
+  if (uploads.length > 0) {
+    await env.MEDIA.delete(uploads.map((upload) => uploadKey(upload.id)));
   }
 
   return json(
@@ -668,15 +778,23 @@ async function createSubmission(request: Request, env: WorkerEnv): Promise<Respo
       ok: true,
       id,
       message:
-        categoryValue === "photo" && series
-          ? `投稿已提交，系统已建议归入“${imageSeriesLabel(series)}”，等待管理员确认。`
-          : "投稿已提交，审核通过后会自动出现在投稿区。",
+        categoryValue === "series"
+          ? `投稿已自动整理为包含 ${mediaItems.length} 项内容的系列，等待管理员审核。`
+          : categoryValue === "photo" && series
+            ? `投稿已提交，系统已建议归入“${imageSeriesLabel(series)}”，等待管理员确认。`
+            : "投稿已提交，审核通过后会自动出现在投稿区。",
     },
     201,
   );
 }
 
 function publicSubmission(record: SubmissionRecord): Record<string, unknown> {
+  const media = submissionMedia(record).map((item, index) => ({
+    mediaType: item.mediaType,
+    mediaName: item.mediaName,
+    mediaUrl: `/api/submissions/${record.id}/media/${index}`,
+  }));
+  const firstMedia = media[0];
   return {
     id: record.id,
     category: record.category,
@@ -686,9 +804,12 @@ function publicSubmission(record: SubmissionRecord): Record<string, unknown> {
     createdAt: record.createdAt,
     approvedAt: record.approvedAt,
     sourceUrl: record.sourceUrl,
-    mediaType: record.mediaType,
-    mediaName: record.mediaName,
-    mediaUrl: record.mediaKey ? `/api/submissions/${record.id}/media` : undefined,
+    mediaType: firstMedia?.mediaType,
+    mediaName: firstMedia?.mediaName,
+    mediaUrl: firstMedia ? `/api/submissions/${record.id}/media` : undefined,
+    media,
+    mediaCount: media.length,
+    isSeries: record.category === "series" || media.length > 1,
     series: record.series,
     seriesLabel: record.series ? imageSeriesLabel(record.series) : undefined,
   };
@@ -710,8 +831,16 @@ async function listApproved(request: Request, env: WorkerEnv): Promise<Response>
   return json({ submissions: filtered.map(publicSubmission) });
 }
 
-function rangeHeaders(object: R2ObjectBody, headers: Headers): number {
+function rangeHeaders(
+  object: R2ObjectBody,
+  headers: Headers,
+  rangeRequested: boolean,
+): number {
   headers.set("Accept-Ranges", "bytes");
+  if (!rangeRequested) {
+    headers.set("Content-Length", String(object.size));
+    return 200;
+  }
   const range = object.range;
   if (!range) {
     headers.set("Content-Length", String(object.size));
@@ -747,13 +876,12 @@ function rangeHeaders(object: R2ObjectBody, headers: Headers): number {
 async function serveMedia(
   request: Request,
   env: WorkerEnv,
-  record: SubmissionRecord,
+  media: SubmissionMedia,
   isPublic: boolean,
 ): Promise<Response> {
-  if (!record.mediaKey) return json({ error: "该投稿没有上传媒体文件。" }, 404);
   const rangeHeader = request.headers.get("range");
   const object = await env.MEDIA.get(
-    record.mediaKey,
+    media.mediaKey,
     rangeHeader ? { range: request.headers } : undefined,
   );
   if (!object) return json({ error: "媒体文件不存在。" }, 404);
@@ -762,8 +890,15 @@ async function serveMedia(
   headers.set("ETag", object.httpEtag);
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Cache-Control", isPublic ? "public, max-age=3600" : "private, no-store");
-  const status = rangeHeaders(object, headers);
+  const status = rangeHeaders(object, headers, Boolean(rangeHeader));
   return new Response(request.method === "HEAD" ? null : object.body, { status, headers });
+}
+
+function mediaAt(record: SubmissionRecord, indexValue: string | undefined): SubmissionMedia | null {
+  const media = submissionMedia(record);
+  const index = indexValue === undefined ? 0 : Number(indexValue);
+  if (!Number.isSafeInteger(index) || index < 0 || index >= media.length) return null;
+  return media[index];
 }
 
 async function handlePublicApi(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
@@ -773,13 +908,15 @@ async function handlePublicApi(request: Request, env: WorkerEnv, url: URL): Prom
     return json({ error: "Method not allowed" }, 405);
   }
 
-  const mediaMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/media$/);
+  const mediaMatch = url.pathname.match(/^\/api\/submissions\/([^/]+)\/media(?:\/(\d+))?$/);
   if (mediaMatch && (request.method === "GET" || request.method === "HEAD")) {
     const id = mediaMatch[1];
     if (!validId(id)) return json({ error: "无效的投稿编号。" }, 400);
     const record = await readSubmission(env, approvedKey(id));
     if (!record) return json({ error: "投稿不存在或尚未通过审核。" }, 404);
-    return serveMedia(request, env, record, true);
+    const media = mediaAt(record, mediaMatch[2]);
+    if (!media) return json({ error: "该投稿没有对应的媒体文件。" }, 404);
+    return serveMedia(request, env, media, true);
   }
 
   return json({ error: "Not found" }, 404);
@@ -794,17 +931,27 @@ async function handleAdminApi(request: Request, env: WorkerEnv, url: URL): Promi
     return json({ submissions: await listSubmissions(env, "pending") });
   }
 
+  const mediaMatch = url.pathname.match(
+    /^\/api\/admin\/submissions\/([^/]+)\/media(?:\/(\d+))?$/,
+  );
+  if (mediaMatch && (request.method === "GET" || request.method === "HEAD")) {
+    const id = mediaMatch[1];
+    if (!validId(id)) return json({ error: "无效的投稿编号。" }, 400);
+    const record = await readSubmission(env, pendingKey(id));
+    if (!record) return json({ error: "待审核投稿不存在。" }, 404);
+    const media = mediaAt(record, mediaMatch[2]);
+    if (!media) return json({ error: "该投稿没有对应的媒体文件。" }, 404);
+    return serveMedia(request, env, media, false);
+  }
+
   const match = url.pathname.match(
-    /^\/api\/admin\/submissions\/([^/]+)\/(approve|reject|media)$/,
+    /^\/api\/admin\/submissions\/([^/]+)\/(approve|reject)$/,
   );
   if (!match || !validId(match[1])) return json({ error: "Not found" }, 404);
   const [, id, action] = match;
   const record = await readSubmission(env, pendingKey(id));
   if (!record) return json({ error: "待审核投稿不存在。" }, 404);
 
-  if (action === "media" && (request.method === "GET" || request.method === "HEAD")) {
-    return serveMedia(request, env, record, false);
-  }
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   if (action === "approve") {
@@ -845,9 +992,8 @@ async function handleAdminApi(request: Request, env: WorkerEnv, url: URL): Promi
     return json({ ok: true, message: "投稿已通过并自动上架。" });
   }
 
-  await env.MEDIA.delete(
-    record.mediaKey ? [pendingKey(id), record.mediaKey] : pendingKey(id),
-  );
+  const keys = [pendingKey(id), ...submissionMedia(record).map((media) => media.mediaKey)];
+  await env.MEDIA.delete([...new Set(keys)]);
   return json({ ok: true, message: "投稿已拒绝并删除。" });
 }
 

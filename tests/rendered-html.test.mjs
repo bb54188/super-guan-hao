@@ -78,6 +78,10 @@ test("renders submission page", async () => {
   assert.match(html, /投稿人/);
   assert.match(html, /自动识别/);
   assert.match(html, /可以简短填写/);
+  assert.match(html, /两个及以上文件会自动合并为一个系列/);
+  const mediaInput = html.match(/<input(?=[^>]*name="media")[^>]*>/i)?.[0];
+  assert.ok(mediaInput);
+  assert.match(mediaInput, /\bmultiple=""/i);
   assert.doesNotMatch(html, /minlength=["']10["']/i);
 });
 
@@ -169,39 +173,52 @@ test("serves valid byte ranges for submitted video", async () => {
     mediaType: "video/mp4",
     mediaName: "video.mp4",
   };
+  const env = {
+    ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
+    MEDIA: {
+      get: async (key, options) => {
+        if (key.endsWith(`/approved/${id}.json`)) {
+          return { json: async () => record };
+        }
+        if (key === mediaKey) {
+          const ranged = Boolean(options);
+          return {
+            size: 10,
+            range: { offset: 0, length: ranged ? 4 : 10, suffix: undefined },
+            httpEtag: '"test-etag"',
+            body: new Blob([ranged ? "0123" : "0123456789"]).stream(),
+            writeHttpMetadata(headers) {
+              headers.set("Content-Type", "video/mp4");
+            },
+          };
+          }
+        return null;
+      },
+    },
+  };
+  const context = { waitUntil() {}, passThroughOnException() {} };
   const response = await worker.fetch(
     new Request(`http://localhost/api/submissions/${id}/media`, {
       headers: { Range: "bytes=0-3" },
     }),
-    {
-      ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
-      MEDIA: {
-        get: async (key) => {
-          if (key.endsWith(`/approved/${id}.json`)) {
-            return { json: async () => record };
-          }
-          if (key === mediaKey) {
-            return {
-              size: 10,
-              range: { offset: 0, length: 4, suffix: undefined },
-              httpEtag: '"test-etag"',
-              body: new Blob(["0123"]).stream(),
-              writeHttpMetadata(headers) {
-                headers.set("Content-Type", "video/mp4");
-              },
-            };
-          }
-          return null;
-        },
-      },
-    },
-    { waitUntil() {}, passThroughOnException() {} },
+    env,
+    context,
   );
 
   assert.equal(response.status, 206);
   assert.equal(response.headers.get("content-range"), "bytes 0-3/10");
   assert.equal(response.headers.get("content-length"), "4");
   assert.equal(await response.text(), "0123");
+
+  const fullResponse = await worker.fetch(
+    new Request(`http://localhost/api/submissions/${id}/media`),
+    env,
+    context,
+  );
+  assert.equal(fullResponse.status, 200);
+  assert.equal(fullResponse.headers.get("content-range"), null);
+  assert.equal(fullResponse.headers.get("content-length"), "10");
+  assert.equal(await fullResponse.text(), "0123456789");
 });
 
 test("streams an accepted media upload into R2", async () => {
@@ -247,6 +264,154 @@ test("streams an accepted media upload into R2", async () => {
     [...stored.keys()].some((key) => key.includes("/uploads/") && key.endsWith(".json")),
     true,
   );
+});
+
+test("automatically groups multiple uploads into one series", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `multi-series-${process.pid}-${Date.now()}`);
+  const { default: worker } = await import(workerUrl.href);
+  const stored = new Map();
+  const mediaBinding = {
+    put: async (key, value, options = {}) => {
+      if (typeof value === "string") {
+        stored.set(key, { kind: "text", value, contentType: options.httpMetadata?.contentType });
+      } else {
+        stored.set(key, {
+          kind: "bytes",
+          value: await new Response(value).arrayBuffer(),
+          contentType: options.httpMetadata?.contentType,
+        });
+      }
+      return {};
+    },
+    get: async (key) => {
+      const object = stored.get(key);
+      if (!object) return null;
+      if (object.kind === "text") {
+        return {
+          size: new TextEncoder().encode(object.value).byteLength,
+          json: async () => JSON.parse(object.value),
+          arrayBuffer: async () => new TextEncoder().encode(object.value).buffer,
+        };
+      }
+      return {
+        size: object.value.byteLength,
+        httpEtag: '"series-test-etag"',
+        body: new Blob([object.value]).stream(),
+        arrayBuffer: async () => object.value,
+        writeHttpMetadata(headers) {
+          if (object.contentType) headers.set("Content-Type", object.contentType);
+        },
+      };
+    },
+    delete: async (keys) => {
+      for (const key of Array.isArray(keys) ? keys : [keys]) stored.delete(key);
+    },
+    list: async ({ prefix }) => ({
+      objects: [...stored.keys()]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => ({ key })),
+    }),
+  };
+  const env = {
+    ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
+    MEDIA: mediaBinding,
+  };
+  const context = { waitUntil() {}, passThroughOnException() {} };
+
+  async function upload(file, name, category) {
+    const response = await worker.fetch(
+      new Request("http://localhost/api/submission-uploads", {
+        method: "PUT",
+        headers: {
+          "content-length": String(file.size),
+          "content-type": file.type,
+          "x-file-name": encodeURIComponent(name),
+          "x-submission-category": category,
+        },
+        body: file,
+      }),
+      env,
+      context,
+    );
+    assert.equal(response.status, 201);
+    return response.json();
+  }
+
+  const photo = await upload(
+    new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: "image/jpeg" }),
+    "系列照片.jpg",
+    "photo",
+  );
+  const video = await upload(
+    new Blob(["series-video"], { type: "video/mp4" }),
+    "系列视频.mp4",
+    "video",
+  );
+  const body = JSON.stringify({
+    category: "series",
+    title: "测试混合系列",
+    description: "同一次投稿中的照片和视频。",
+    submitter: "测试投稿人",
+    agreement: true,
+    uploads: [photo, video].map(({ uploadId, uploadToken }) => ({ uploadId, uploadToken })),
+  });
+  const response = await worker.fetch(
+    new Request("http://localhost/api/submissions", {
+      method: "POST",
+      headers: {
+        "content-length": String(new TextEncoder().encode(body).byteLength),
+        "content-type": "application/json",
+      },
+      body,
+    }),
+    env,
+    context,
+  );
+
+  assert.equal(response.status, 201);
+  assert.match((await response.json()).message, /2 项内容的系列/);
+  const pendingKey = [...stored.keys()].find(
+    (key) => key.includes("/pending/") && key.endsWith(".json"),
+  );
+  assert.ok(pendingKey);
+  const pending = JSON.parse(stored.get(pendingKey).value);
+  assert.equal(pending.category, "series");
+  assert.equal(pending.mediaItems.length, 2);
+  assert.deepEqual(
+    pending.mediaItems.map((item) => item.mediaName),
+    ["系列照片.jpg", "系列视频.mp4"],
+  );
+  assert.equal(
+    [...stored.keys()].some((key) => key.includes("/uploads/") && key.endsWith(".json")),
+    false,
+  );
+
+  const approvedKey = pendingKey.replace("/pending/", "/approved/");
+  stored.set(approvedKey, {
+    kind: "text",
+    value: JSON.stringify({ ...pending, status: "approved", approvedAt: new Date().toISOString() }),
+  });
+  const publicList = await worker.fetch(
+    new Request("http://localhost/api/submissions?category=series"),
+    env,
+    context,
+  );
+  assert.equal(publicList.status, 200);
+  const [publicSeries] = (await publicList.json()).submissions;
+  assert.equal(publicSeries.category, "series");
+  assert.equal(publicSeries.isSeries, true);
+  assert.equal(publicSeries.media.length, 2);
+  assert.match(publicSeries.media[1].mediaUrl, /\/media\/1$/);
+
+  const secondMedia = await worker.fetch(
+    new Request(`http://localhost/api/submissions/${pending.id}/media/1`),
+    env,
+    context,
+  );
+  assert.equal(secondMedia.status, 200);
+  assert.equal(secondMedia.headers.get("content-type"), "video/mp4");
+  assert.equal(await secondMedia.text(), "series-video");
 });
 
 test("classifies an uploaded image and stores its suggested series", async () => {

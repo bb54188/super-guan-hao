@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 
-type Category = "all" | "photo" | "video" | "story";
+type Category = "all" | "photo" | "video" | "story" | "series";
 type ImageSeries =
   | "wet-hair"
   | "bedside-gaming"
@@ -14,6 +14,11 @@ type ImageSeries =
   | "other-photo"
   | "unclassified";
 type ImageSeriesFilter = "all" | ImageSeries;
+type SubmissionMedia = {
+  mediaType: string;
+  mediaName: string;
+  mediaUrl: string;
+};
 type Submission = {
   id: string;
   category: Exclude<Category, "all">;
@@ -26,6 +31,9 @@ type Submission = {
   mediaType?: string;
   mediaName?: string;
   mediaUrl?: string;
+  media?: SubmissionMedia[];
+  mediaCount?: number;
+  isSeries?: boolean;
   series?: ImageSeries;
   seriesLabel?: string;
 };
@@ -35,9 +43,10 @@ const categories: Array<{ value: Category; label: string }> = [
   { value: "photo", label: "图片" },
   { value: "video", label: "视频" },
   { value: "story", label: "事迹" },
+  { value: "series", label: "系列" },
 ];
 
-const categoryLabel = { photo: "图片", video: "视频", story: "事迹" };
+const categoryLabel = { photo: "图片", video: "视频", story: "事迹", series: "系列" };
 const imageSeries: Array<{ value: ImageSeriesFilter; label: string }> = [
   { value: "all", label: "全部系列" },
   { value: "wet-hair", label: "清晨洗头" },
@@ -49,6 +58,18 @@ const imageSeries: Array<{ value: ImageSeriesFilter; label: string }> = [
   { value: "other-photo", label: "其他影像" },
   { value: "unclassified", label: "待整理" },
 ];
+
+function submissionMedia(item: Submission): SubmissionMedia[] {
+  if (item.media?.length) return item.media;
+  if (!item.mediaUrl || !item.mediaType) return [];
+  return [
+    {
+      mediaType: item.mediaType,
+      mediaName: item.mediaName ?? "media",
+      mediaUrl: item.mediaUrl,
+    },
+  ];
+}
 
 export default function SubmissionsPage() {
   const [category, setCategory] = useState<Category>("all");
@@ -90,7 +111,7 @@ export default function SubmissionsPage() {
       <header className="community-hero archive-hero">
         <p className="section-kicker">APPROVED SUBMISSIONS · 审核发布</p>
         <h1>校园投稿区。</h1>
-        <p>这里仅展示已经通过管理员审核的图片、视频和事迹；图片会按自动识别并人工确认的系列归档。</p>
+        <p>这里仅展示已经通过管理员审核的图片、视频、事迹和系列；多文件投稿会作为同一个系列完整展示。</p>
         <a className="archive-submit-link" href="/submit">提交新内容 <span aria-hidden="true">↗</span></a>
       </header>
 
@@ -150,16 +171,40 @@ export default function SubmissionsPage() {
         )}
 
         <div className="archive-grid">
-          {items.map((item, index) => (
-            <article className="community-card" key={item.id}>
-              {item.mediaUrl && item.mediaType?.startsWith("image/") && (
-                <a className="community-card-media" href={item.mediaUrl} target="_blank" rel="noreferrer">
-                  <img src={item.mediaUrl} alt={item.title} loading={index > 2 ? "lazy" : "eager"} />
-                </a>
-              )}
-              {item.mediaUrl && item.mediaType?.startsWith("video/") && (
-                <div className="community-card-media">
-                  <video controls preload="metadata" src={item.mediaUrl} aria-label={item.title} />
+          {items.map((item, index) => {
+            const media = submissionMedia(item);
+            const isSeries = item.isSeries || item.category === "series" || media.length > 1;
+            return (
+              <article className={`community-card${isSeries ? " is-series" : ""}`} key={item.id}>
+              {media.length > 0 && (
+                <div className={`community-media-grid${isSeries ? " is-series" : ""}`}>
+                  {media.map((mediaItem, mediaIndex) =>
+                    mediaItem.mediaType.startsWith("image/") ? (
+                      <a
+                        className="community-card-media"
+                        href={mediaItem.mediaUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        key={mediaItem.mediaUrl}
+                      >
+                        <img
+                          src={mediaItem.mediaUrl}
+                          alt={`${item.title}${isSeries ? ` · 第 ${mediaIndex + 1} 项` : ""}`}
+                          loading={index > 2 || mediaIndex > 1 ? "lazy" : "eager"}
+                        />
+                      </a>
+                    ) : mediaItem.mediaType.startsWith("video/") ? (
+                      <div className="community-card-media" key={mediaItem.mediaUrl}>
+                        <video
+                          controls
+                          playsInline
+                          preload="metadata"
+                          src={mediaItem.mediaUrl}
+                          aria-label={`${item.title}${isSeries ? ` · 第 ${mediaIndex + 1} 项` : ""}`}
+                        />
+                      </div>
+                    ) : null,
+                  )}
                 </div>
               )}
               <div className="community-card-copy">
@@ -167,6 +212,7 @@ export default function SubmissionsPage() {
                   <span>
                     {categoryLabel[item.category]}
                     {item.category === "photo" && item.seriesLabel ? ` · ${item.seriesLabel}` : ""}
+                    {isSeries ? ` · ${media.length} 项` : ""}
                   </span>
                   <time dateTime={item.approvedAt ?? item.createdAt}>
                     {new Date(item.approvedAt ?? item.createdAt).toLocaleDateString("zh-CN")}
@@ -179,8 +225,9 @@ export default function SubmissionsPage() {
                   {item.sourceUrl && <a href={item.sourceUrl} target="_blank" rel="noreferrer">素材来源 ↗</a>}
                 </footer>
               </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
       </section>
 
